@@ -1,0 +1,18 @@
+{
+  "extName": {
+    "message": "[B.M] YouTube Shorts 倍速",
+    "description": "扩展名称（Chrome 商店／扩展列表）。"
+  },
+  "extDescription": {
+    "message": "适用于 YouTube Shorts（youtube.com/shorts/*）的浏览器扩展：新增倍速按钮，点击依次切换 1×、1.5×、2×、3×，以 HTMLVideoElement.playbackRate 实际变速。",
+    "description": "扩展说明（商店／列表）。"
+  },
+  "ariaPlaybackSpeed": {
+    "message": "播放速度",
+    "description": "倍速按钮的无障碍标签。"
+  },
+  "captionSpeed": {
+    "message": "速度",
+    "description": "按钮下方标签文字。"
+  }
+}

@@ -1,0 +1,63 @@
+/* 與 Shorts 右側操作列（喜歡按鈕列）視覺對齊，不依賴 YouTube 內部 hash class */
+
+#yts-speed-root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  width: 48px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+  pointer-events: auto;
+  /* 與同列按鈕間距由外層 reel 決定；此處與喜歡之間留縫 */
+  row-gap: 0;
+}
+
+#yts-speed-root .yts-speed-btn {
+  box-sizing: border-box;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Roboto", "YouTube Noto", Arial, sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  /* 與未按讚的 yt-spec tonal/mono 圓鈕一致：淺色疊在影片上（非黑底） */
+  color: var(--yt-spec-text-primary, #fff);
+  background-color: var(
+    --yt-spec-10-percent-layer,
+    rgba(255, 255, 255, 0.1)
+  );
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: filter 0.12s ease, transform 0.1s ease;
+}
+
+#yts-speed-root .yts-speed-btn:hover {
+  filter: brightness(1.14);
+}
+
+#yts-speed-root .yts-speed-btn:active {
+  filter: brightness(0.92);
+  transform: scale(0.96);
+}
+
+#yts-speed-root .yts-speed-caption {
+  margin-top: 6px;
+  max-width: 56px;
+  text-align: center;
+  font-family: "Roboto", "YouTube Noto", Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--yt-spec-text-secondary, rgba(255, 255, 255, 0.9));
+  white-space: nowrap;
+}

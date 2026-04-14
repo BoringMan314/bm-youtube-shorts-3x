@@ -1,0 +1,13 @@
+# 本機／打包產物
+*.zip
+*.crx
+*.pem
+*.url
+
+# 系統雜檔
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 設計原始檔（可選；若需一併版控請刪除此列）
+icons/*.psd

@@ -1,0 +1,18 @@
+{
+  "extName": {
+    "message": "[B.M] YouTube Shorts 倍速",
+    "description": "擴充功能名稱（Chrome 商店／擴充功能清單）。"
+  },
+  "extDescription": {
+    "message": "在 YouTube Shorts（youtube.com/shorts/*）的瀏覽器擴充功能：新增倍速按鈕，點擊依序切換 1×、1.5×、2×、3×，以 HTMLVideoElement.playbackRate 實際變速。",
+    "description": "擴充功能說明（商店／清單）。"
+  },
+  "ariaPlaybackSpeed": {
+    "message": "播放速度",
+    "description": "倍速按鈕的無障礙標籤。"
+  },
+  "captionSpeed": {
+    "message": "速度",
+    "description": "按鈕下方標籤文字。"
+  }
+}
