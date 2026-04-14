@@ -3,6 +3,13 @@
 
   const SPEEDS = [1, 1.5, 2, 3];
   const ROOT_ID = "yts-speed-root";
+  const VIDEO_HOOK_KEY = "bmYts3xHooked";
+  const CONTROLLER_ATTR = "data-bm-yts-controller";
+  let mainTickInterval = null;
+
+  function isToolboxControllerActive() {
+    return document.documentElement.getAttribute(CONTROLLER_ATTR) === "toolbox";
+  }
 
   function t(key) {
     try {
@@ -95,6 +102,21 @@
 
   function getSpeed() {
     return SPEEDS[currentIndex];
+  }
+
+  function findSpeedIndexByRate(rate) {
+    for (let i = 0; i < SPEEDS.length; i++) {
+      if (Math.abs(SPEEDS[i] - rate) < 0.01) return i;
+    }
+    return -1;
+  }
+
+  function syncIndexFromObservedRate(rate) {
+    const idx = findSpeedIndexByRate(rate);
+    if (idx < 0 || idx === currentIndex) return false;
+    currentIndex = idx;
+    if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
+    return true;
   }
 
   function formatSpeedLabel(s) {
@@ -413,11 +435,31 @@
     }
   }
 
+  function stopSelfForToolboxTakeover() {
+    if (mountObserver) {
+      mountObserver.disconnect();
+      mountObserver = null;
+    }
+    teardownVideoHooks();
+    if (mainTickInterval) {
+      clearInterval(mainTickInterval);
+      mainTickInterval = null;
+    }
+    if (speedRootEl && speedRootEl.isConnected) {
+      speedRootEl.remove();
+    }
+    speedRootEl = null;
+  }
+
   function hookVideoElement(v) {
-    if (!(v instanceof HTMLVideoElement) || v.dataset.ytsSpeedHooked)
+    if (!(v instanceof HTMLVideoElement) || v.dataset[VIDEO_HOOK_KEY])
       return;
-    v.dataset.ytsSpeedHooked = "1";
+    v.dataset[VIDEO_HOOK_KEY] = "1";
     v.addEventListener("ratechange", () => {
+      if (syncIndexFromObservedRate(v.playbackRate)) {
+        applyToAllLikelyVideos();
+        return;
+      }
       const want = getSpeed();
       if (Math.abs(v.playbackRate - want) > 0.01) {
         applyPlaybackRateTo(v);
@@ -473,6 +515,10 @@
   }
 
   function tick() {
+    if (isToolboxControllerActive()) {
+      stopSelfForToolboxTakeover();
+      return;
+    }
     if (!ensureMounted()) return;
     ensureSpeedAnchorIntact();
     if (!videoObserver) setupVideoHooks();
@@ -480,11 +526,14 @@
     syncSpeedUiWithNativeLike();
   }
 
+  if (isToolboxControllerActive()) {
+    return;
+  }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", tick);
   } else {
     tick();
   }
   initObservers();
-  setInterval(tick, 2000);
+  mainTickInterval = setInterval(tick, 2000);
 })();
