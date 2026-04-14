@@ -5,6 +5,7 @@
   const ROOT_ID = "yts-speed-root";
   const VIDEO_HOOK_KEY = "bmYts3xHooked";
   const CONTROLLER_ATTR = "data-bm-yts-controller";
+  const SPEED_STORAGE_KEY = "bmYts3xSpeed";
   let mainTickInterval = null;
 
   function isToolboxControllerActive() {
@@ -22,6 +23,28 @@
   }
 
   let currentIndex = 0;
+  function loadPersistedSpeedIndex() {
+    try {
+      const raw = sessionStorage.getItem(SPEED_STORAGE_KEY);
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return 0;
+      const idx = Math.max(0, Math.min(SPEEDS.length - 1, Math.floor(value)));
+      return idx;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function persistSpeedIndex() {
+    try {
+      sessionStorage.setItem(SPEED_STORAGE_KEY, String(currentIndex));
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  currentIndex = loadPersistedSpeedIndex();
+
   let mountObserver = null;
   let videoObserver = null;
   let reapplyTimer = null;
@@ -115,6 +138,7 @@
     const idx = findSpeedIndexByRate(rate);
     if (idx < 0 || idx === currentIndex) return false;
     currentIndex = idx;
+    persistSpeedIndex();
     if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
     return true;
   }
@@ -362,6 +386,7 @@
 
   function cycleSpeed() {
     currentIndex = (currentIndex + 1) % SPEEDS.length;
+    persistSpeedIndex();
     if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
     applyToAllLikelyVideos();
   }
@@ -456,10 +481,6 @@
       return;
     v.dataset[VIDEO_HOOK_KEY] = "1";
     v.addEventListener("ratechange", () => {
-      if (syncIndexFromObservedRate(v.playbackRate)) {
-        applyToAllLikelyVideos();
-        return;
-      }
       const want = getSpeed();
       if (Math.abs(v.playbackRate - want) > 0.01) {
         applyPlaybackRateTo(v);
