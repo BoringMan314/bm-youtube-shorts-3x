@@ -54,9 +54,9 @@
 
 ## 安裝方式
 
-### 從 Chrome 線上應用程式商店（若已上架）
+### 從 Chrome 線上應用程式商店（建議）
 
-上架後可於 [Chrome Web Store](https://chromewebstore.google.com/) 搜尋 **「[B.M] YouTube Shorts 倍速」** 安裝。
+請在 [Chrome Web Store](https://chromewebstore.google.com/) 搜尋 **「[[B.M] YouTube Shorts 倍速](https://chromewebstore.google.com/detail/bm-youtube-shorts-%E5%80%8D%E9%80%9F/egbmmammcamnnjboocodlifnjlkjdafa)」**，或直接點選連結前往商店頁面安裝。
 
 ### 從原始碼載入（開發人員模式）
 
