@@ -1,0 +1,18 @@
+{
+  "ariaPlaybackSpeed": {
+    "message": "Playback speed",
+    "description": "Accessibility label for the speed button."
+  },
+  "captionSpeed": {
+    "message": "Speed",
+    "description": "Caption below the button."
+  },
+  "extDescription": {
+    "message": "A browser extension for YouTube Shorts (youtube.com/shorts/*): adds a playback speed button; click to cycle 1×, 1.5×, 2×, 3×, using HTMLVideoElement.playbackRate to change speed.",
+    "description": "Extension description (English)"
+  },
+  "extName": {
+    "message": "[B.M] YouTube Shorts Speed",
+    "description": "Extension name (English)"
+  }
+}
