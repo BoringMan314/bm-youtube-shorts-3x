@@ -1,4 +1,24 @@
 {
+  "popupAriaDefaultShortSpeedCycle": {
+    "message": "Cycle default Shorts playback speed: 1×, 1.5×, 2×, 3×.",
+    "description": "ARIA label for the default playback speed cycle button."
+  },
+  "popupAriaHoldSpeedCycle": {
+    "message": "Cycle playback speed while holding on the player: 1×, 1.5×, 2×, 3×.",
+    "description": "ARIA label for the hold-to-accelerate speed cycle button."
+  },
+  "popupDefaultHoldSpeedLabel": {
+    "message": "Default speed while holding on the player",
+    "description": "Popup label for hold-to-accelerate default rate."
+  },
+  "popupDefaultShortSpeedLabel": {
+    "message": "Default Shorts playback speed",
+    "description": "Popup label for normal playback default rate."
+  },
+  "popupTitle": {
+    "message": "[B.M] YouTube Shorts Speed",
+    "description": "Extension popup title."
+  },
   "ariaPlaybackSpeed": {
     "message": "Playback speed",
     "description": "Accessibility label for the speed button."

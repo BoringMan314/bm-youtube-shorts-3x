@@ -6,6 +6,8 @@
 	const VIDEO_HOOK_KEY = 'bmYts3xHooked';
 	const CONTROLLER_ATTR = 'data-bm-yts-controller';
 	const SPEED_STORAGE_KEY = 'bmYts3xSpeed';
+	const STORAGE_KEY_DEFAULT_SPEED_INDEX = 'bmYts3xOptsDefaultSpeedIndex';
+	const STORAGE_KEY_HOLD_SPEED_INDEX = 'bmYts3xOptsHoldSpeedIndex';
 	let mainTickInterval = null;
 
 	function isToolboxControllerActive() {
@@ -21,16 +23,26 @@
 	}
 
 	let currentIndex = 0;
-	function loadPersistedSpeedIndex() {
+	let holdActive = false;
+	let holdPointerId = null;
+	let holdSpeedIndex = 2;
+
+	function readSessionIndex() {
 		try {
 			const raw = sessionStorage.getItem(SPEED_STORAGE_KEY);
+			if (raw === null || raw === '') return null;
 			const value = Number(raw);
-			if (!Number.isFinite(value)) return 0;
-			const idx = Math.max(0, Math.min(SPEEDS.length - 1, Math.floor(value)));
-			return idx;
+			if (!Number.isFinite(value)) return null;
+			return Math.max(0, Math.min(SPEEDS.length - 1, Math.floor(value)));
 		} catch (_) {
-			return 0;
+			return null;
 		}
+	}
+
+	function clampSpeedIndex(i) {
+		const n = Number(i);
+		if (!Number.isFinite(n)) return 0;
+		return Math.max(0, Math.min(SPEEDS.length - 1, Math.floor(n)));
 	}
 
 	function persistSpeedIndex() {
@@ -39,7 +51,49 @@
 		} catch (_) {}
 	}
 
-	currentIndex = loadPersistedSpeedIndex();
+	function getEffectivePlaybackRate() {
+		return SPEEDS[holdActive ? holdSpeedIndex : currentIndex];
+	}
+
+	function initStorageBackedOptions() {
+		try {
+			chrome.storage.local.get(
+				{
+					[STORAGE_KEY_DEFAULT_SPEED_INDEX]: 0,
+					[STORAGE_KEY_HOLD_SPEED_INDEX]: 2,
+				},
+				(res) => {
+					if (chrome.runtime.lastError) return;
+					holdSpeedIndex = clampSpeedIndex(res[STORAGE_KEY_HOLD_SPEED_INDEX]);
+					const sess = readSessionIndex();
+					if (sess !== null) {
+						currentIndex = sess;
+					} else {
+						currentIndex = clampSpeedIndex(res[STORAGE_KEY_DEFAULT_SPEED_INDEX]);
+						persistSpeedIndex();
+					}
+					if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
+					applyToAllLikelyVideos();
+				}
+			);
+		} catch (_) {}
+	}
+
+	try {
+		chrome.storage.onChanged.addListener((changes, areaName) => {
+			if (areaName !== 'local') return;
+			if (changes[STORAGE_KEY_HOLD_SPEED_INDEX]) {
+				holdSpeedIndex = clampSpeedIndex(changes[STORAGE_KEY_HOLD_SPEED_INDEX].newValue);
+				if (holdActive) applyToAllLikelyVideos();
+			}
+			if (changes[STORAGE_KEY_DEFAULT_SPEED_INDEX]) {
+				currentIndex = clampSpeedIndex(changes[STORAGE_KEY_DEFAULT_SPEED_INDEX].newValue);
+				persistSpeedIndex();
+				if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
+				applyToAllLikelyVideos();
+			}
+		});
+	} catch (_) {}
 
 	let mountObserver = null;
 	let videoObserver = null;
@@ -128,6 +182,7 @@
 	}
 
 	function syncIndexFromObservedRate(rate) {
+		if (holdActive) return false;
 		const idx = findSpeedIndexByRate(rate);
 		if (idx < 0 || idx === currentIndex) return false;
 		currentIndex = idx;
@@ -315,7 +370,7 @@
 
 	function applyPlaybackRateTo(video) {
 		if (!video) return;
-		const rate = getSpeed();
+		const rate = getEffectivePlaybackRate();
 		try {
 			video.playbackRate = rate;
 			video.defaultPlaybackRate = rate;
@@ -325,7 +380,7 @@
 	function applyToAllLikelyVideos() {
 		const primary = getActiveShortsVideo();
 		applyPlaybackRateTo(primary);
-		const rate = getSpeed();
+		const rate = getEffectivePlaybackRate();
 		document.querySelectorAll('ytd-reel-video-renderer video').forEach((v) => {
 			if (v === primary) return;
 			try {
@@ -439,7 +494,7 @@
 		if (!(v instanceof HTMLVideoElement) || v.dataset[VIDEO_HOOK_KEY]) return;
 		v.dataset[VIDEO_HOOK_KEY] = '1';
 		v.addEventListener('ratechange', () => {
-			const want = getSpeed();
+			const want = getEffectivePlaybackRate();
 			if (Math.abs(v.playbackRate - want) > 0.01) {
 				applyPlaybackRateTo(v);
 			}
@@ -474,6 +529,122 @@
 			attributes: true,
 			attributeFilter: ['hidden', 'class', 'style'],
 		});
+	}
+
+	function shouldStartHold(e) {
+		if (isToolboxControllerActive()) return false;
+		if (!e.isPrimary) return false;
+		if (e.pointerType === 'mouse' && e.button !== 0) return false;
+		const t = e.target;
+		if (!(t instanceof Element)) return false;
+		if (t.closest('input, textarea, select, [contenteditable="true"]')) return false;
+		if (t.closest('#' + ROOT_ID)) return false;
+		if (isInsideCommentsPanel(t)) return false;
+		if (
+			t.closest('#actions, ytd-reel-player-overlay-renderer #actions, reel-action-bar-item-view-model')
+		)
+			return false;
+
+		const v = getActiveShortsVideo();
+		if (!v) return false;
+		const x = e.clientX;
+		const y = e.clientY;
+		const r = v.getBoundingClientRect();
+		if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false;
+
+		const actions = document.querySelector('ytd-reel-player-overlay-renderer #actions');
+		if (actions) {
+			const ar = actions.getBoundingClientRect();
+			if (x >= ar.left && x <= ar.right && y >= ar.top && y <= ar.bottom) return false;
+		}
+		return true;
+	}
+
+	const HOLD_ACTIVATE_MS = 200;
+
+	let holdListenersInstalled = false;
+	function installHoldListeners() {
+		if (holdListenersInstalled) return;
+		holdListenersInstalled = true;
+
+		let pendingPointerId = null;
+		let pendingTimer = null;
+
+		function tearDownReleaseListeners() {
+			window.removeEventListener('pointerup', onRelease, true);
+			window.removeEventListener('pointercancel', onRelease, true);
+			window.removeEventListener('blur', onBlurWhilePendingOrHold, false);
+		}
+
+		function suppressSyntheticClickAfterHold() {
+			function blockClick(ev) {
+				ev.preventDefault();
+				ev.stopImmediatePropagation();
+				document.removeEventListener('click', blockClick, true);
+			}
+			document.addEventListener('click', blockClick, true);
+		}
+
+		function deactivateHoldPlayback() {
+			if (!holdActive) return;
+			holdActive = false;
+			holdPointerId = null;
+			applyToAllLikelyVideos();
+		}
+
+		function activateHoldPlayback(pid) {
+			holdActive = true;
+			holdPointerId = pid;
+			applyToAllLikelyVideos();
+		}
+
+		function cancelPendingHold() {
+			if (pendingTimer !== null) {
+				clearTimeout(pendingTimer);
+				pendingTimer = null;
+			}
+			pendingPointerId = null;
+		}
+
+		function onBlurWhilePendingOrHold() {
+			cancelPendingHold();
+			tearDownReleaseListeners();
+			deactivateHoldPlayback();
+		}
+
+		function onRelease(e) {
+			if (pendingPointerId === null) return;
+			if (e && e.pointerId !== undefined && e.pointerId !== pendingPointerId) return;
+
+			const hadAccelerated = holdActive;
+
+			cancelPendingHold();
+			tearDownReleaseListeners();
+
+			if (hadAccelerated) {
+				deactivateHoldPlayback();
+				suppressSyntheticClickAfterHold();
+			}
+		}
+
+		document.documentElement.addEventListener(
+			'pointerdown',
+			(e) => {
+				if (holdActive || pendingPointerId !== null) return;
+				if (!shouldStartHold(e)) return;
+
+				pendingPointerId = e.pointerId;
+				pendingTimer = setTimeout(() => {
+					pendingTimer = null;
+					activateHoldPlayback(pendingPointerId);
+				}, HOLD_ACTIVATE_MS);
+
+				window.addEventListener('pointerup', onRelease, true);
+				window.addEventListener('pointercancel', onRelease, true);
+				window.addEventListener('blur', onBlurWhilePendingOrHold, false);
+			},
+			true
+		);
 	}
 
 	function initObservers() {
@@ -515,4 +686,6 @@
 	}
 	initObservers();
 	mainTickInterval = setInterval(tick, 2000);
+	initStorageBackedOptions();
+	installHoldListeners();
 })();
