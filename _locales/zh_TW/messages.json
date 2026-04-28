@@ -1,4 +1,24 @@
 {
+  "popupAriaDefaultShortSpeedCycle": {
+    "message": "循環預設 Shorts 倍速（1×、1.5×、2×、3×）",
+    "description": "設定彈窗內預設倍速循環按鈕的無障礙標籤。"
+  },
+  "popupAriaHoldSpeedCycle": {
+    "message": "循環按住畫面時使用的倍速（1×、1.5×、2×、3×）",
+    "description": "設定彈窗內按住倍速循環按鈕的無障礙標籤。"
+  },
+  "popupDefaultHoldSpeedLabel": {
+    "message": "預設按住畫面的倍速",
+    "description": "設定彈窗：按住畫面加速的預設倍率。"
+  },
+  "popupDefaultShortSpeedLabel": {
+    "message": "預設短影片倍速",
+    "description": "設定彈窗：一般播放的預設倍率。"
+  },
+  "popupTitle": {
+    "message": "[B.M] YouTube Shorts 倍速",
+    "description": "瀏覽器擴充功能設定彈窗標題。"
+  },
   "ariaPlaybackSpeed": {
     "message": "播放速度",
     "description": "倍速按鈕的無障礙標籤。"

@@ -1,4 +1,24 @@
 {
+  "popupAriaDefaultShortSpeedCycle": {
+    "message": "ショートの既定再生速度を切り替えます（1×、1.5×、2×、3×）。",
+    "description": "ポップアップの既定倍速ボタンの aria ラベル。"
+  },
+  "popupAriaHoldSpeedCycle": {
+    "message": "長押し時の既定倍速を切り替えます（1×、1.5×、2×、3×）。",
+    "description": "ポップアップの長押し倍速ボタンの aria ラベル。"
+  },
+  "popupDefaultHoldSpeedLabel": {
+    "message": "長押し時の既定倍速",
+    "description": "ポップアップ：画面を長押ししたときの既定倍率。"
+  },
+  "popupDefaultShortSpeedLabel": {
+    "message": "ショートの既定倍速",
+    "description": "ポップアップ：通常再生の既定倍率。"
+  },
+  "popupTitle": {
+    "message": "[B.M] YouTube Shorts 倍速",
+    "description": "拡張機能ポップアップのタイトル。"
+  },
   "ariaPlaybackSpeed": {
     "message": "再生速度",
     "description": "倍速ボタンのアクセシビリティラベル。"
