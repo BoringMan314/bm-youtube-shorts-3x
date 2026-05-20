@@ -27,14 +27,19 @@
   font-weight: 600;
   line-height: 1;
   letter-spacing: -0.02em;
-  color: var(--yt-spec-text-primary, #fff);
-  background-color: var(
-    --yt-spec-10-percent-layer,
-    rgba(255, 255, 255, 0.1)
-  );
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   transition: filter 0.12s ease, transform 0.1s ease;
+}
+
+#yts-speed-root[data-bm-theme="dark"] .yts-speed-btn {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+#yts-speed-root[data-bm-theme="light"] .yts-speed-btn {
+  color: #0f0f0f;
+  background-color: rgba(0, 0, 0, 0.05);
 }
 
 #yts-speed-root .yts-speed-btn:hover {
@@ -54,6 +59,13 @@
   font-size: 12px;
   font-weight: 400;
   line-height: 1.2;
-  color: var(--yt-spec-text-secondary, rgba(255, 255, 255, 0.9));
   white-space: nowrap;
+}
+
+#yts-speed-root[data-bm-theme="dark"] .yts-speed-caption {
+  color: #fff;
+}
+
+#yts-speed-root[data-bm-theme="light"] .yts-speed-caption {
+  color: #0f0f0f;
 }

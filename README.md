@@ -3,6 +3,7 @@
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)](https://developer.chrome.com/docs/extensions/mv3/)
 [![Site](https://img.shields.io/badge/site-YouTube_Shorts-FF0000?logo=youtube)](https://www.youtube.com/shorts/)
 [![GitHub](https://img.shields.io/badge/GitHub-bm--youtube--shorts--3x-181717?logo=github)](https://github.com/BoringMan314/bm-youtube-shorts-3x)
+[![GitHub all releases](https://img.shields.io/github/downloads/BoringMan314/bm-youtube-shorts-3x/total)](https://github.com/BoringMan314/bm-youtube-shorts-3x/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 適用於 **[YouTube Shorts](https://www.youtube.com/shorts/)**（`youtube.com/shorts/*`）的瀏覽器擴充功能：新增**倍速**按鈕，點擊依序切換 **1×、1.5×、2×、3×**，以 `HTMLVideoElement.playbackRate` 實際變速。
