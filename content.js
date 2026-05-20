@@ -98,15 +98,81 @@
 	let mountObserver = null;
 	let videoObserver = null;
 	let reapplyTimer = null;
+	let mutatingDom = 0;
+	let mountDebounceTimer = null;
+	let lastMountWorkAt = 0;
+	let scopeCache = null;
+	let scopeCacheAt = 0;
 	let speedRootEl = null;
 
 	const SHADOW_STYLES = `
 #${ROOT_ID}{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;width:48px;margin-bottom:16px;flex-shrink:0;pointer-events:auto}
-#${ROOT_ID} .yts-speed-btn{box-sizing:border-box;width:48px;height:48px;padding:0;margin:0;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:13px;font-weight:600;line-height:1;letter-spacing:-0.02em;color:var(--yt-spec-text-primary,#fff);background-color:var(--yt-spec-10-percent-layer,rgba(255,255,255,.1));backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:filter .12s ease,transform .1s ease}
+#${ROOT_ID} .yts-speed-btn{box-sizing:border-box;width:48px;height:48px;padding:0;margin:0;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:13px;font-weight:600;line-height:1;letter-spacing:-0.02em;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:filter .12s ease,transform .1s ease}
+#${ROOT_ID}[data-bm-theme="dark"] .yts-speed-btn{color:#fff;background-color:rgba(255,255,255,.1)}
+#${ROOT_ID}[data-bm-theme="light"] .yts-speed-btn{color:#0f0f0f;background-color:rgba(0,0,0,.05)}
 #${ROOT_ID} .yts-speed-btn:hover{filter:brightness(1.14)}
 #${ROOT_ID} .yts-speed-btn:active{filter:brightness(.92);transform:scale(.96)}
-#${ROOT_ID} .yts-speed-caption{margin-top:6px;max-width:56px;text-align:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:12px;font-weight:400;line-height:1.2;color:var(--yt-spec-text-secondary,rgba(255,255,255,.9));white-space:nowrap}
+#${ROOT_ID} .yts-speed-caption{margin-top:6px;max-width:56px;text-align:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:12px;font-weight:400;line-height:1.2;white-space:nowrap}
+#${ROOT_ID}[data-bm-theme="dark"] .yts-speed-caption{color:#fff}
+#${ROOT_ID}[data-bm-theme="light"] .yts-speed-caption{color:#0f0f0f}
 `;
+
+	function isYouTubeDarkTheme() {
+		const html = document.documentElement;
+		if (html && (html.hasAttribute('dark') || html.getAttribute('dark') === 'true')) {
+			return true;
+		}
+		const ytdApp = document.querySelector('ytd-app');
+		if (ytdApp instanceof HTMLElement) {
+			if (ytdApp.hasAttribute('dark') || ytdApp.getAttribute('dark') === 'true') return true;
+		}
+		return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+	}
+
+	function getThemeFallbacks() {
+		if (isYouTubeDarkTheme()) {
+			return { btnBg: 'rgba(255, 255, 255, 0.1)', btnFg: '#fff', captionFg: '#fff' };
+		}
+		return { btnBg: 'rgba(0, 0, 0, 0.05)', btnFg: '#0f0f0f', captionFg: '#0f0f0f' };
+	}
+
+	function readVisibleColor(el) {
+		if (!(el instanceof HTMLElement)) return '';
+		const cs = getComputedStyle(el);
+		const color = cs.color;
+		if (color && color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') return color;
+		return '';
+	}
+
+	function readVisibleBackground(el) {
+		if (!(el instanceof HTMLElement)) return '';
+		const cs = getComputedStyle(el);
+		let bg = cs.backgroundColor;
+		if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+		const fill = el.querySelector('.yt-spec-touch-feedback-shape__fill');
+		if (fill instanceof HTMLElement) {
+			bg = getComputedStyle(fill).backgroundColor;
+			if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+		}
+		return '';
+	}
+
+	function findNativeLikeCaptionElement() {
+		const likeInner = findLikeInner();
+		if (!likeInner) return null;
+		const row = findLikeRowElement(likeInner);
+		if (!(row instanceof HTMLElement)) return null;
+		const nodes = row.querySelectorAll(
+			'yt-formatted-string, .yt-core-attributed-string, .yt-spec-button-shape-next__button-text-content, span'
+		);
+		for (const el of nodes) {
+			if (!(el instanceof HTMLElement)) continue;
+			if (el.closest('button')) continue;
+			if (!(el.textContent || '').trim()) continue;
+			return el;
+		}
+		return null;
+	}
 
 	function findNativeLikeButtonForStyle() {
 		const scope = getShortsReelUiScopeRoot();
@@ -137,37 +203,29 @@
 		const cap = root.querySelector('.yts-speed-caption');
 		if (!(btn instanceof HTMLButtonElement)) return;
 
+		const dark = isYouTubeDarkTheme();
+		root.setAttribute('data-bm-theme', dark ? 'dark' : 'light');
+
+		const fallbacks = getThemeFallbacks();
+		let btnBg = fallbacks.btnBg;
+		let btnFg = fallbacks.btnFg;
+		let capFg = fallbacks.captionFg;
+
 		const ref = findNativeLikeButtonForStyle();
-		if (!ref || !ref.isConnected) {
-			btn.style.removeProperty('background-color');
-			btn.style.removeProperty('color');
-			if (cap instanceof HTMLElement) cap.style.removeProperty('color');
-			return;
+		if (ref && ref.isConnected) {
+			const nativeBg = readVisibleBackground(ref);
+			const nativeFg = readVisibleColor(ref);
+			if (nativeBg) btnBg = nativeBg;
+			if (nativeFg) btnFg = nativeFg;
 		}
 
-		if (ref.getAttribute('aria-pressed') === 'true') {
-			btn.style.removeProperty('background-color');
-			btn.style.removeProperty('color');
-			if (cap instanceof HTMLElement) cap.style.removeProperty('color');
-			return;
-		}
+		const captionEl = findNativeLikeCaptionElement();
+		const nativeCapFg = readVisibleColor(captionEl);
+		if (nativeCapFg) capFg = nativeCapFg;
 
-		const cs = getComputedStyle(ref);
-		let bg = cs.backgroundColor;
-		if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
-			const fill = ref.querySelector('.yt-spec-touch-feedback-shape__fill');
-			if (fill instanceof HTMLElement) {
-				bg = getComputedStyle(fill).backgroundColor;
-			}
-		}
-		if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
-			btn.style.backgroundColor = bg;
-		}
-		const fg = cs.color;
-		if (fg) {
-			btn.style.color = fg;
-			if (cap instanceof HTMLElement) cap.style.color = fg;
-		}
+		btn.style.backgroundColor = btnBg;
+		btn.style.color = btnFg;
+		if (cap instanceof HTMLElement) cap.style.color = capFg;
 	}
 
 	function getSpeed() {
@@ -239,16 +297,63 @@
 		return !!(el.closest('ytd-reel-player-overlay-renderer') || el.closest('#shorts-player'));
 	}
 
-	function getShortsReelUiScopeRoot() {
-		const overlay =
-			document.querySelector('ytd-reel-player-overlay-renderer') ||
-			querySelectorDeep('ytd-reel-player-overlay-renderer', document.documentElement);
-		if (overlay && !isInsideCommentsPanel(overlay)) return overlay;
+	function clearStaleToolboxControllerAttr() {
+		if (document.documentElement.getAttribute(CONTROLLER_ATTR) !== 'toolbox') return;
+		if (document.querySelector(`#${ROOT_ID} .yts-toolbox-panel`)) return;
+		document.documentElement.removeAttribute(CONTROLLER_ATTR);
+	}
 
-		const sp =
-			document.querySelector('#shorts-player') ||
-			querySelectorDeep('#shorts-player', document.documentElement);
-		if (sp && !isInsideCommentsPanel(sp)) return sp;
+	function beginDomMutation() {
+		mutatingDom += 1;
+	}
+
+	function endDomMutation() {
+		mutatingDom = Math.max(0, mutatingDom - 1);
+	}
+
+	function isDomMutating() {
+		return mutatingDom > 0;
+	}
+
+	function invalidateScopeCache() {
+		scopeCache = null;
+		scopeCacheAt = 0;
+	}
+
+	function getShortsReelUiScopeRoot() {
+		const now = Date.now();
+		if (scopeCache && scopeCache.isConnected && now - scopeCacheAt < 500) {
+			return scopeCache;
+		}
+
+		for (const o of document.querySelectorAll('ytd-reel-player-overlay-renderer')) {
+			if (!(o instanceof HTMLElement) || isInsideCommentsPanel(o)) continue;
+			const r = o.getBoundingClientRect();
+			if (r.width < 8 || r.height < 8 || r.bottom <= 0 || r.top >= window.innerHeight) continue;
+			if (
+				o.querySelector(
+					'#actions, #like-button, like-button-view-model, segmented-like-dislike-button-view-model'
+				)
+			) {
+				scopeCache = o;
+				scopeCacheAt = now;
+				return o;
+			}
+		}
+
+		const overlay = document.querySelector('ytd-reel-player-overlay-renderer');
+		if (overlay instanceof HTMLElement && !isInsideCommentsPanel(overlay)) {
+			scopeCache = overlay;
+			scopeCacheAt = now;
+			return overlay;
+		}
+
+		const sp = document.querySelector('#shorts-player');
+		if (sp instanceof HTMLElement && !isInsideCommentsPanel(sp)) {
+			scopeCache = sp;
+			scopeCacheAt = now;
+			return sp;
+		}
 
 		return null;
 	}
@@ -297,33 +402,67 @@
 	function attachRootAboveLikeRow(root, likeRow) {
 		const column = likeRow.parentElement;
 		if (!column) return false;
-		column.insertBefore(root, likeRow);
-		const rn = root.getRootNode();
-		if (rn instanceof ShadowRoot) {
-			ensureStylesInShadowRoot(rn);
-		}
-		if (getComputedStyle(column).flexDirection === 'column-reverse') {
-			const rr = root.getBoundingClientRect();
-			const lr = likeRow.getBoundingClientRect();
-			if (!(rr.top < lr.top)) {
-				if (likeRow.nextSibling) {
-					column.insertBefore(root, likeRow.nextSibling);
-				} else {
-					column.appendChild(root);
-				}
-				if (!(root.getBoundingClientRect().top < likeRow.getBoundingClientRect().top)) {
-					column.insertBefore(root, likeRow);
+		beginDomMutation();
+		try {
+			column.insertBefore(root, likeRow);
+			const rn = root.getRootNode();
+			if (rn instanceof ShadowRoot) {
+				ensureStylesInShadowRoot(rn);
+			}
+			if (getComputedStyle(column).flexDirection === 'column-reverse') {
+				const rr = root.getBoundingClientRect();
+				const lr = likeRow.getBoundingClientRect();
+				if (!(rr.top < lr.top)) {
+					if (likeRow.nextSibling) {
+						column.insertBefore(root, likeRow.nextSibling);
+					} else {
+						column.appendChild(root);
+					}
+					if (!(root.getBoundingClientRect().top < likeRow.getBoundingClientRect().top)) {
+						column.insertBefore(root, likeRow);
+					}
 				}
 			}
+		} finally {
+			endDomMutation();
 		}
 		return true;
+	}
+
+	function findFirstActionBarRow(scope) {
+		if (!(scope instanceof HTMLElement)) return null;
+		const actions = scope.querySelector('#actions');
+		if (!(actions instanceof HTMLElement)) return null;
+		for (const child of actions.children) {
+			if (!(child instanceof HTMLElement)) continue;
+			if (!isInReelActionUi(child)) continue;
+			const btn = child.querySelector('button');
+			if (!(btn instanceof HTMLButtonElement)) continue;
+			return findLikeRowElement(btn) || child;
+		}
+		return null;
+	}
+
+	function findMountAnchorRow() {
+		const likeInner = findLikeInner();
+		if (likeInner && likeInner.isConnected) {
+			const likeRow = findLikeRowElement(likeInner);
+			if (likeRow) return likeRow;
+		}
+		return findFirstActionBarRow(getShortsReelUiScopeRoot());
 	}
 
 	function ensureSpeedAnchorIntact() {
 		if (!speedRootEl || !speedRootEl.isConnected) return;
 		if (!isInReelActionUi(speedRootEl)) {
-			speedRootEl.remove();
+			beginDomMutation();
+			try {
+				speedRootEl.remove();
+			} finally {
+				endDomMutation();
+			}
 			speedRootEl = null;
+			invalidateScopeCache();
 			return;
 		}
 		const likeInner = findLikeInner();
@@ -331,9 +470,8 @@
 		const likeRow = findLikeRowElement(likeInner);
 		if (!likeRow || !likeRow.parentElement) return;
 		const column = likeRow.parentElement;
-		if (speedRootEl.parentElement !== column || speedRootEl.nextSibling !== likeRow) {
-			attachRootAboveLikeRow(speedRootEl, likeRow);
-		}
+		if (speedRootEl.parentElement === column && speedRootEl.nextSibling === likeRow) return;
+		attachRootAboveLikeRow(speedRootEl, likeRow);
 	}
 
 	function getActiveShortsVideo() {
@@ -409,13 +547,40 @@
 
 	let btnLabel = null;
 
+	function findLikeByAriaFallback(scope) {
+		if (!(scope instanceof HTMLElement)) return null;
+		const actions = scope.querySelector('#actions');
+		if (!(actions instanceof HTMLElement)) return null;
+		for (const btn of actions.querySelectorAll('button')) {
+			if (!(btn instanceof HTMLButtonElement)) continue;
+			const label = (
+				btn.getAttribute('aria-label') ||
+				btn.getAttribute('title') ||
+				btn.textContent ||
+				''
+			).toLowerCase();
+			if (!/(like|喜歡|喜歡這|点赞|讚|いいね)/i.test(label)) continue;
+			return (
+				btn.closest('#like-button') ||
+				btn.closest('like-button-view-model') ||
+				btn.closest('segmented-like-dislike-button-view-model') ||
+				btn
+			);
+		}
+		return null;
+	}
+
 	function findLikeInner() {
 		const scope = getShortsReelUiScopeRoot();
 		if (!scope) return null;
 		const hit =
+			scope.querySelector('#like-button') ||
+			scope.querySelector('like-button-view-model') ||
+			scope.querySelector('segmented-like-dislike-button-view-model') ||
 			querySelectorDeep('#like-button', scope) ||
 			querySelectorDeep('like-button-view-model', scope) ||
-			querySelectorDeep('segmented-like-dislike-button-view-model', scope);
+			querySelectorDeep('segmented-like-dislike-button-view-model', scope) ||
+			findLikeByAriaFallback(scope);
 		if (!hit || !isInReelActionUi(hit)) return null;
 		return hit;
 	}
@@ -423,8 +588,8 @@
 	function ensureMounted() {
 		if (speedRootEl && speedRootEl.isConnected) return true;
 
-		const likeInner = findLikeInner();
-		if (!likeInner || !likeInner.isConnected) return false;
+		const anchorRow = findMountAnchorRow();
+		if (!anchorRow || !anchorRow.isConnected || !anchorRow.parentElement) return false;
 
 		const root = document.createElement('div');
 		root.id = ROOT_ID;
@@ -450,13 +615,16 @@
 		root.appendChild(btn);
 		root.appendChild(caption);
 
-		const likeRow = findLikeRowElement(likeInner);
-		if (likeRow && likeRow.parentElement) {
-			attachRootAboveLikeRow(root, likeRow);
-		} else {
-			const host = likeInner.closest('reel-action-bar-item-view-model') || likeInner.parentElement;
-			if (!host || !host.parentElement) return false;
-			host.parentElement.insertBefore(root, host);
+		beginDomMutation();
+		try {
+			if (!attachRootAboveLikeRow(root, anchorRow)) {
+				const host =
+					anchorRow.closest('reel-action-bar-item-view-model') || anchorRow.parentElement;
+				if (!host || !host.parentElement) return false;
+				host.parentElement.insertBefore(root, host);
+			}
+		} finally {
+			endDomMutation();
 		}
 
 		const rn = root.getRootNode();
@@ -475,9 +643,10 @@
 	}
 
 	function stopSelfForToolboxTakeover() {
-		if (mountObserver) {
-			mountObserver.disconnect();
-			mountObserver = null;
+		disconnectMountObserver();
+		if (mountDebounceTimer) {
+			clearTimeout(mountDebounceTimer);
+			mountDebounceTimer = null;
 		}
 		teardownVideoHooks();
 		if (mainTickInterval) {
@@ -526,8 +695,6 @@
 		videoObserver.observe(shortsRoot, {
 			childList: true,
 			subtree: true,
-			attributes: true,
-			attributeFilter: ['hidden', 'class', 'style'],
 		});
 	}
 
@@ -647,21 +814,67 @@
 		);
 	}
 
-	function initObservers() {
-		if (mountObserver) mountObserver.disconnect();
+	function disconnectMountObserver() {
+		if (!mountObserver) return;
+		mountObserver.disconnect();
+		mountObserver = null;
+	}
+
+	function runMountPass() {
+		if (isToolboxControllerActive()) {
+			stopSelfForToolboxTakeover();
+			return;
+		}
+		const mounted = ensureMounted();
+		if (mounted) disconnectMountObserver();
+		if (!mounted) return;
+		ensureSpeedAnchorIntact();
+		if (!videoObserver) setupVideoHooks();
+		syncSpeedUiWithNativeLike();
+	}
+
+	function scheduleMountPass() {
+		if (isDomMutating()) return;
+		if (speedRootEl && speedRootEl.isConnected) return;
+		if (mountDebounceTimer) return;
+		mountDebounceTimer = setTimeout(() => {
+			mountDebounceTimer = null;
+			const now = Date.now();
+			if (now - lastMountWorkAt < 300) return;
+			lastMountWorkAt = now;
+			runMountPass();
+		}, 150);
+	}
+
+	function initMountObserver() {
+		if (mountObserver) return;
+		if (speedRootEl && speedRootEl.isConnected) return;
+		const observeRoot = document.querySelector('ytd-shorts');
+		if (!observeRoot) return;
 		mountObserver = new MutationObserver(() => {
-			if (!(speedRootEl && speedRootEl.isConnected)) {
-				speedRootEl = null;
-				if (ensureMounted()) setupVideoHooks();
-			} else {
-				ensureSpeedAnchorIntact();
-				scheduleReapply();
+			if (isDomMutating()) return;
+			if (speedRootEl && speedRootEl.isConnected) {
+				disconnectMountObserver();
+				return;
 			}
+			scheduleMountPass();
 		});
-		mountObserver.observe(document.documentElement, {
-			childList: true,
-			subtree: true,
-		});
+		mountObserver.observe(observeRoot, { childList: true, subtree: true });
+	}
+
+	function onShortsNavigation() {
+		invalidateScopeCache();
+		if (speedRootEl && speedRootEl.isConnected) {
+			beginDomMutation();
+			try {
+				speedRootEl.remove();
+			} finally {
+				endDomMutation();
+			}
+		}
+		speedRootEl = null;
+		initMountObserver();
+		scheduleMountPass();
 	}
 
 	function tick() {
@@ -669,22 +882,29 @@
 			stopSelfForToolboxTakeover();
 			return;
 		}
-		if (!ensureMounted()) return;
+		if (!speedRootEl || !speedRootEl.isConnected) {
+			runMountPass();
+			return;
+		}
 		ensureSpeedAnchorIntact();
-		if (!videoObserver) setupVideoHooks();
-		scheduleReapply();
 		syncSpeedUiWithNativeLike();
 	}
 
+	clearStaleToolboxControllerAttr();
 	if (isToolboxControllerActive()) {
 		return;
 	}
 	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', tick);
+		document.addEventListener('DOMContentLoaded', () => {
+			runMountPass();
+			initMountObserver();
+		});
 	} else {
-		tick();
+		runMountPass();
+		initMountObserver();
 	}
-	initObservers();
+	window.addEventListener('pageshow', onShortsNavigation);
+	window.addEventListener('yt-navigate-finish', onShortsNavigation);
 	mainTickInterval = setInterval(tick, 2000);
 	initStorageBackedOptions();
 	installHoldListeners();
