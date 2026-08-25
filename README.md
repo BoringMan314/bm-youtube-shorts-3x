@@ -88,7 +88,7 @@
 | [`manifest.json`](manifest.json) | Manifest V3、`content_scripts`、圖示與版本號 |
 | [`content.js`](content.js) | 掛載 UI、倍速邏輯、DOM／影片監聽 |
 | [`content.css`](content.css) | 主文件樹內樣式（Shadow 內由腳本另行注入對應規則） |
-| [`_locales/`](_locales/) | 多語系字串（`zh_TW`、`zh_CN`、`ja_JP`、`en_US`） |
+| [`_locales/`](_locales/) | 多語系字串（`zh_TW`、`zh_CN`、`ja`、`en_US`） |
 | [`privacy-policy.html`](privacy-policy.html) | 隱私權政策（上架商店所需之公開網頁） |
 | [`icons/`](icons/) | 工具列與商店用圖示：icon.png |
 | [`screenshot/`](screenshot/) | 商店與說明用截圖 |
@@ -100,7 +100,7 @@
 
 - **版本**：以 [`manifest.json`](manifest.json) 的 `version` 為準。
 - **預設語系**：`zh_TW`（`default_locale`）。
-- **內建語系**：`zh_TW`、`zh_CN`、`ja_JP`、`en_US`（路徑為 `_locales/<code>/messages.json`）。實際顯示依瀏覽器語系與遞減規則。
+- **內建語系**：`zh_TW`、`zh_CN`、`ja`、`en_US`（路徑為 `_locales/<code>/messages.json`）。實際顯示依瀏覽器語系與遞減規則。
 
 ---
 
