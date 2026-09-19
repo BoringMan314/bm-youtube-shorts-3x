@@ -39,9 +39,10 @@
 ## 功能
 
 - **倍速切換**：預設 **1×**，點擊依序 **1× → 1.5× → 2× → 3× → 1×**。
-- **版面**：掛在 **Shorts 播放器覆蓋層**（`ytd-reel-player-overlay-renderer`／`#shorts-player`）內，與**喜歡**同一條直欄，並維持在喜歡列**正上方**（DOM 上為喜歡列的上一個兄弟節點）。
-- **外觀**：按鈕樣式貼近未按讚的 **yt-spec** 圓形鈕（淺色半透明底），並可鏡像原生喜歡鈕的計算後顏色。
-- **留言開啟時**：僅在 Shorts 影片操作區搜尋錨點，**不會**誤用留言區內的按讚節點。
+- **版面**：以原生「讚」列為錨點，將倍速鈕以 `position: fixed` 貼在讚鈕正上方；不插入 Lit 的 `reel-action-bar-view-model`，避免原生按鈕被拆掉。
+- **外觀**：按鈕樣式貼近未按讚的 **yt-spec** 圓形鈕（淺色半透明底），並可鏡像原生喜歡鈕的計算後顏色與尺寸。
+- **長按加速**：按住影片區可暫切到選項中的長按倍速；工具箱若同時安裝則自動讓出控制。
+- **與工具箱共存**：若偵測到 `[B.M] YouTube Shorts 工具箱`（`data-bm-yts-controller="toolbox"` 或工具箱面板），本擴充會卸下自己的按鈕並停止掛載；工具箱卸載後會自動恢復。
 
 ---
 
@@ -75,8 +76,9 @@
 ## 技術概要
 
 - **內容腳本** [`content.js`](content.js) 於 `document_idle` 注入，僅匹配 `https://www.youtube.com/shorts/*` 與 `https://youtube.com/shorts/*`。
-- **錨點**：在 **`ytd-reel-player-overlay-renderer`** 或 **`#shorts-player`** 子樹內尋找喜歡按鈕，避免與留言區 `#like-button` 混淆；掛載於 **`reel-action-bar-item-view-model`**（或等價列）之前。
-- **倍速**：設定 `video.playbackRate`／`defaultPlaybackRate`，並在切換 Short、`loadedmetadata`、`playing` 等時重套；必要時於 **Shadow DOM** 內注入與 [`content.css`](content.css) 對應的樣式字串。
+- **錨點**：在 **`ytd-reel-player-overlay-renderer`**／`reel-action-bar-view-model` 子樹內尋找喜歡按鈕，避免與留言區 `#like-button` 混淆；UI 掛在 `document.body`，以讚列座標對齊。
+- **握手／接管**：與工具箱共用 `data-bm-yts-controller`。工具箱在場時本擴充讓出；工具箱離開後由 tick 恢復。
+- **倍速**：設定 `video.playbackRate`／`defaultPlaybackRate`，並在切換 Short、`loadedmetadata`、`playing` 等時重套。
 - **權限**：未宣告 `host_permissions`；以 `content_scripts.matches` 限縮網址。
 
 ---

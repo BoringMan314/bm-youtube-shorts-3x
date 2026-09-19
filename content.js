@@ -5,13 +5,28 @@
 	const ROOT_ID = 'yts-speed-root';
 	const VIDEO_HOOK_KEY = 'bmYts3xHooked';
 	const CONTROLLER_ATTR = 'data-bm-yts-controller';
+	const TOOLBOX_ROLE = 'toolbox';
+	const SPEED_ROLE = 'speed';
 	const SPEED_STORAGE_KEY = 'bmYts3xSpeed';
 	const STORAGE_KEY_DEFAULT_SPEED_INDEX = 'bmYts3xOptsDefaultSpeedIndex';
 	const STORAGE_KEY_HOLD_SPEED_INDEX = 'bmYts3xOptsHoldSpeedIndex';
 	let mainTickInterval = null;
 
+	function isLiveToolboxUi() {
+		if (document.querySelector(`#${ROOT_ID} .yts-toolbox-panel`)) return true;
+		if (document.querySelector(`#${ROOT_ID}[data-bm-yts-role="${TOOLBOX_ROLE}"]`)) return true;
+		return false;
+	}
+
 	function isToolboxControllerActive() {
-		return document.documentElement.getAttribute(CONTROLLER_ATTR) === 'toolbox';
+		if (isLiveToolboxUi()) return true;
+		return document.documentElement.getAttribute(CONTROLLER_ATTR) === TOOLBOX_ROLE;
+	}
+
+	function clearStaleToolboxControllerAttr() {
+		if (document.documentElement.getAttribute(CONTROLLER_ATTR) !== TOOLBOX_ROLE) return;
+		if (isLiveToolboxUi()) return;
+		document.documentElement.removeAttribute(CONTROLLER_ATTR);
 	}
 
 	function t(key) {
@@ -106,15 +121,23 @@
 	let speedRootEl = null;
 
 	const SHADOW_STYLES = `
-#${ROOT_ID}{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;width:48px;margin-bottom:16px;flex-shrink:0;pointer-events:auto}
-#${ROOT_ID} .yts-speed-btn{box-sizing:border-box;width:48px;height:48px;padding:0;margin:0;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:13px;font-weight:600;line-height:1;letter-spacing:-0.02em;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:filter .12s ease,transform .1s ease}
-#${ROOT_ID}[data-bm-theme="dark"] .yts-speed-btn{color:#fff;background-color:rgba(255,255,255,.1)}
-#${ROOT_ID}[data-bm-theme="light"] .yts-speed-btn{color:#0f0f0f;background-color:rgba(0,0,0,.05)}
-#${ROOT_ID} .yts-speed-btn:hover{filter:brightness(1.14)}
-#${ROOT_ID} .yts-speed-btn:active{filter:brightness(.92);transform:scale(.96)}
-#${ROOT_ID} .yts-speed-caption{margin-top:6px;max-width:56px;text-align:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:12px;font-weight:400;line-height:1.2;white-space:nowrap}
+#${ROOT_ID}{--bm-btn-size:48px;--bm-btn-bg:rgba(255,255,255,.1);--bm-btn-fg:#fff;--bm-btn-backdrop:blur(8px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;width:var(--bm-btn-size);margin-bottom:0;flex-shrink:0;pointer-events:auto;position:relative;z-index:2147483646}
+#${ROOT_ID}[data-bm-theme="light"]{--bm-btn-bg:rgba(0,0,0,.05);--bm-btn-fg:#0f0f0f}
+#${ROOT_ID}[data-bm-overlay-dark]{--bm-btn-bg:rgba(0,0,0,.3);--bm-btn-fg:#fff;--bm-btn-backdrop:none}
+#${ROOT_ID} .yts-speed-btn{box-sizing:border-box;width:var(--bm-btn-size);height:var(--bm-btn-size);padding:0;margin:0;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:13px;font-weight:600;line-height:1;letter-spacing:-0.02em;color:var(--bm-btn-fg,#fff);background-color:var(--bm-btn-bg,rgba(255,255,255,.1));backdrop-filter:var(--bm-btn-backdrop,blur(8px));-webkit-backdrop-filter:var(--bm-btn-backdrop,blur(8px));transition:background-color .12s ease,transform .1s ease;position:relative;overflow:hidden}
+#${ROOT_ID} .yts-speed-btn::after{content:"";position:absolute;inset:0;border-radius:inherit;background:transparent;pointer-events:none}
+#${ROOT_ID}[data-bm-theme="dark"] .yts-speed-btn{color:var(--bm-btn-fg,#fff);background-color:var(--bm-btn-bg,rgba(255,255,255,.1))}
+#${ROOT_ID}[data-bm-theme="light"] .yts-speed-btn{color:var(--bm-btn-fg,#0f0f0f);background-color:var(--bm-btn-bg,rgba(0,0,0,.05))}
+#${ROOT_ID}[data-bm-overlay-dark] .yts-speed-btn{color:var(--bm-btn-fg,#fff);background-color:var(--bm-btn-bg,rgba(0,0,0,.3));backdrop-filter:none;-webkit-backdrop-filter:none}
+#${ROOT_ID} .yts-speed-btn:hover{filter:none;background-color:var(--bm-btn-bg,rgba(255,255,255,.1))}
+#${ROOT_ID} .yts-speed-btn:hover::after{background:rgba(255,255,255,.1)}
+#${ROOT_ID}[data-bm-theme="light"]:not([data-bm-overlay-dark]) .yts-speed-btn:hover::after{background:rgba(0,0,0,.06)}
+#${ROOT_ID} .yts-speed-btn:active{filter:none;transform:scale(.96)}
+#${ROOT_ID} .yts-speed-btn:active::after{background:rgba(255,255,255,.16)}
+#${ROOT_ID} .yts-speed-caption{margin-top:6px;max-width:56px;text-align:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:12px;font-weight:400;line-height:1.2;white-space:nowrap;position:relative;z-index:1}
 #${ROOT_ID}[data-bm-theme="dark"] .yts-speed-caption{color:#fff}
 #${ROOT_ID}[data-bm-theme="light"] .yts-speed-caption{color:#0f0f0f}
+#${ROOT_ID}[data-bm-overlay-dark] .yts-speed-caption{color:#fff}
 `;
 
 	function isYouTubeDarkTheme() {
@@ -129,11 +152,55 @@
 		return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
 	}
 
-	function getThemeFallbacks() {
-		if (isYouTubeDarkTheme()) {
-			return { btnBg: 'rgba(255, 255, 255, 0.1)', btnFg: '#fff', captionFg: '#fff' };
+	function parseCssColor(s) {
+		if (!s) return null;
+		const m = String(s).match(
+			/rgba?\(\s*([\d.]+)\s*[, ]\s*([\d.]+)\s*[, ]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)/i
+		);
+		if (!m) return null;
+		let a = m[4] === undefined ? 1 : Number(m[4]);
+		if (a > 1) a /= 100;
+		return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]), a };
+	}
+
+	function looksLightFrost(bg) {
+		const c = parseCssColor(bg);
+		return !!(c && c.r > 160 && c.g > 160 && c.b > 160 && c.a > 0.02 && c.a <= 0.28);
+	}
+
+	function looksDarkFill(bg) {
+		const c = parseCssColor(bg);
+		return !!(c && c.r < 48 && c.g < 48 && c.b < 48 && c.a >= 0.18);
+	}
+
+	function getThemeFallbacks(overlayDark) {
+		if (overlayDark) {
+			return { btnBg: 'rgba(0, 0, 0, 0.3)', btnFg: '#fff', captionFg: '#fff', backdrop: 'none' };
 		}
-		return { btnBg: 'rgba(0, 0, 0, 0.05)', btnFg: '#0f0f0f', captionFg: '#0f0f0f' };
+		if (isYouTubeDarkTheme()) {
+			return {
+				btnBg: 'rgba(255, 255, 255, 0.1)',
+				btnFg: '#fff',
+				captionFg: '#fff',
+				backdrop: 'blur(8px)',
+			};
+		}
+		return {
+			btnBg: 'rgba(0, 0, 0, 0.05)',
+			btnFg: '#0f0f0f',
+			captionFg: '#0f0f0f',
+			backdrop: 'blur(8px)',
+		};
+	}
+
+	function nativeButtonLooksOverlayDark(btn) {
+		if (!(btn instanceof HTMLElement)) return false;
+		if (btn.matches(':hover') || btn.matches(':active')) return false;
+		const bg = readVisibleBackground(btn);
+		if (looksLightFrost(bg)) return false;
+		if (looksDarkFill(bg)) return true;
+		const cls = `${btn.className || ''} ${btn.getAttribute('class') || ''}`;
+		return /OverlayDark|overlay-dark/i.test(cls);
 	}
 
 	function readVisibleColor(el) {
@@ -146,13 +213,18 @@
 
 	function readVisibleBackground(el) {
 		if (!(el instanceof HTMLElement)) return '';
+		if (el.matches(':hover') || el.matches(':active')) return '';
 		const cs = getComputedStyle(el);
 		let bg = cs.backgroundColor;
-		if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
-		const fill = el.querySelector('.yt-spec-touch-feedback-shape__fill');
-		if (fill instanceof HTMLElement) {
+		const parsed = parseCssColor(bg);
+		if (parsed && parsed.a > 0.02) return bg;
+		const fill = el.querySelector(
+			'.yt-spec-touch-feedback-shape__fill, .ytSpecTouchFeedbackShapeFill'
+		);
+		if (fill instanceof HTMLElement && !fill.matches(':hover')) {
 			bg = getComputedStyle(fill).backgroundColor;
-			if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+			const fillParsed = parseCssColor(bg);
+			if (fillParsed && fillParsed.a > 0.02) return bg;
 		}
 		return '';
 	}
@@ -204,27 +276,39 @@
 		if (!(btn instanceof HTMLButtonElement)) return;
 
 		const dark = isYouTubeDarkTheme();
+		const ref = findNativeLikeButtonForStyle();
+		const overlayDark = nativeButtonLooksOverlayDark(ref);
 		root.setAttribute('data-bm-theme', dark ? 'dark' : 'light');
+		root.toggleAttribute('data-bm-overlay-dark', overlayDark);
 
-		const fallbacks = getThemeFallbacks();
+		const fallbacks = getThemeFallbacks(overlayDark);
 		let btnBg = fallbacks.btnBg;
 		let btnFg = fallbacks.btnFg;
 		let capFg = fallbacks.captionFg;
+		let backdrop = fallbacks.backdrop;
 
-		const ref = findNativeLikeButtonForStyle();
-		if (ref && ref.isConnected) {
+		if (ref && ref.isConnected && !ref.matches(':hover') && !ref.matches(':active')) {
 			const nativeBg = readVisibleBackground(ref);
 			const nativeFg = readVisibleColor(ref);
+			const nativeBackdrop =
+				getComputedStyle(ref).backdropFilter || getComputedStyle(ref).webkitBackdropFilter || '';
 			if (nativeBg) btnBg = nativeBg;
 			if (nativeFg) btnFg = nativeFg;
+			if (overlayDark) backdrop = 'none';
+			else if (nativeBackdrop && nativeBackdrop !== 'none') backdrop = nativeBackdrop;
+		} else if (overlayDark) {
+			backdrop = 'none';
 		}
 
 		const captionEl = findNativeLikeCaptionElement();
 		const nativeCapFg = readVisibleColor(captionEl);
 		if (nativeCapFg) capFg = nativeCapFg;
 
-		btn.style.backgroundColor = btnBg;
-		btn.style.color = btnFg;
+		root.style.setProperty('--bm-btn-bg', btnBg);
+		root.style.setProperty('--bm-btn-fg', btnFg);
+		root.style.setProperty('--bm-btn-backdrop', backdrop);
+		btn.style.removeProperty('background-color');
+		btn.style.removeProperty('color');
 		if (cap instanceof HTMLElement) cap.style.color = capFg;
 	}
 
@@ -294,13 +378,11 @@
 	function isInReelActionUi(el) {
 		if (!el) return false;
 		if (isInsideCommentsPanel(el)) return false;
-		return !!(el.closest('ytd-reel-player-overlay-renderer') || el.closest('#shorts-player'));
-	}
-
-	function clearStaleToolboxControllerAttr() {
-		if (document.documentElement.getAttribute(CONTROLLER_ATTR) !== 'toolbox') return;
-		if (document.querySelector(`#${ROOT_ID} .yts-toolbox-panel`)) return;
-		document.documentElement.removeAttribute(CONTROLLER_ATTR);
+		return !!(
+			el.closest('ytd-reel-player-overlay-renderer') ||
+			el.closest('reel-action-bar-view-model') ||
+			el.closest('#shorts-player')
+		);
 	}
 
 	function beginDomMutation() {
@@ -332,7 +414,7 @@
 			if (r.width < 8 || r.height < 8 || r.bottom <= 0 || r.top >= window.innerHeight) continue;
 			if (
 				o.querySelector(
-					'#actions, #like-button, like-button-view-model, segmented-like-dislike-button-view-model'
+					'#actions, #like-button, like-button-view-model, segmented-like-dislike-button-view-model, reel-action-bar-view-model'
 				)
 			) {
 				scopeCache = o;
@@ -382,10 +464,27 @@
 			likeInner.closest('reel-action-bar-item-renderer');
 		if (byItem && byItem.parentElement) return byItem;
 
+		const bar =
+			likeInner.closest('reel-action-bar-view-model') || likeInner.closest('#actions');
+		if (bar) {
+			const tagged = likeInner.closest(
+				'like-button-view-model, segmented-like-dislike-button-view-model, button-view-model'
+			);
+			if (tagged instanceof HTMLElement) {
+				let row = tagged;
+				while (row.parentElement && row.parentElement !== bar) {
+					row = row.parentElement;
+				}
+				if (row.parentElement === bar) return row;
+			}
+		}
+
+		const actionsBoundary = bar || likeInner.closest('#actions');
 		let n = likeInner;
 		for (let depth = 0; depth < 28 && n; depth++) {
 			const p = n.parentElement;
 			if (!p) break;
+			if (actionsBoundary && !actionsBoundary.contains(p)) break;
 			const cs = getComputedStyle(p);
 			if (
 				cs.display.includes('flex') &&
@@ -399,34 +498,125 @@
 		return null;
 	}
 
-	function attachRootAboveLikeRow(root, likeRow) {
-		const column = likeRow.parentElement;
-		if (!column) return false;
+	function isSpeedOnBodyHost(root = speedRootEl) {
+		return !!(
+			root instanceof HTMLElement &&
+			root.isConnected &&
+			root.dataset.ytsFixedHost === '1' &&
+			(root.parentElement === document.body || root.parentElement === document.documentElement)
+		);
+	}
+
+	function isOnScreenActionRect(rect) {
+		if (!rect) return false;
+		if (!(rect.width >= 24 && rect.height >= 24)) return false;
+		if (rect.right <= 8 || rect.bottom <= 8) return false;
+		if (rect.left >= window.innerWidth - 8 || rect.top >= window.innerHeight - 8) return false;
+		return true;
+	}
+
+	function isMastheadGhostRect(rect) {
+		if (!rect) return true;
+		return rect.left < 72 && rect.top < 80;
+	}
+
+	function isButtonSizedActionRect(rect) {
+		if (!isOnScreenActionRect(rect) || isMastheadGhostRect(rect)) return false;
+		if (rect.width > 140 || rect.height > 180) return false;
+		return true;
+	}
+
+	function isUsableActionAnchorRect(rect) {
+		return isButtonSizedActionRect(rect);
+	}
+
+	function getRowAnchorRect(row) {
+		if (!(row instanceof HTMLElement)) return null;
+		const rr = row.getBoundingClientRect();
+		if (isButtonSizedActionRect(rr) && rr.height >= 56) return rr;
+		const btn = row.querySelector('button');
+		if (btn instanceof HTMLElement) {
+			const br = btn.getBoundingClientRect();
+			if (isButtonSizedActionRect(br)) {
+				const pitch = 92;
+				return {
+					left: br.left,
+					top: br.top,
+					width: br.width,
+					height: pitch,
+					right: br.left + br.width,
+					bottom: br.top + pitch,
+				};
+			}
+		}
+		return isButtonSizedActionRect(rr) ? rr : null;
+	}
+
+	function speedHasStableFixedPosition(root) {
+		if (!(root instanceof HTMLElement)) return false;
+		const left = parseFloat(root.style.left);
+		const top = parseFloat(root.style.top);
+		const width = parseFloat(root.style.width) || 48;
+		const height = parseFloat(root.style.height) || 48;
+		if (!Number.isFinite(left) || !Number.isFinite(top)) return false;
+		if (left <= -1000 || top <= -1000) return false;
+		return isUsableActionAnchorRect({
+			left,
+			top,
+			width,
+			height,
+			right: left + width,
+			bottom: top + height,
+		});
+	}
+
+	function syncSpeedLayoutWithNative() {
+		const root = speedRootEl;
+		if (!(root instanceof HTMLElement) || !root.isConnected) return;
+		if (isToolboxControllerActive()) {
+			stopSelfForToolboxTakeover();
+			return;
+		}
+		const likeRow = findMountAnchorRow();
+		const likeRect = getRowAnchorRect(likeRow);
+		if (!(likeRow instanceof HTMLElement) || !likeRect) {
+			if (!speedHasStableFixedPosition(root)) root.style.visibility = 'hidden';
+			return;
+		}
+		const nextTop = Math.round(likeRect.top - likeRect.height);
+		if (nextTop < -24 || nextTop > window.innerHeight - 24) {
+			if (!speedHasStableFixedPosition(root)) root.style.visibility = 'hidden';
+			return;
+		}
+		root.style.visibility = 'visible';
+		root.style.setProperty('position', 'fixed', 'important');
+		root.style.setProperty('left', `${Math.round(likeRect.left)}px`, 'important');
+		root.style.setProperty('top', `${nextTop}px`, 'important');
+		root.style.setProperty('width', `${Math.round(likeRect.width)}px`, 'important');
+		root.style.setProperty('z-index', '2147483646', 'important');
+		root.style.setProperty('pointer-events', 'auto', 'important');
+		const likeBtn = findNativeLikeButtonForStyle();
+		if (likeBtn instanceof HTMLElement) {
+			const rect = likeBtn.getBoundingClientRect();
+			const size = Math.round(Math.max(rect.width, rect.height));
+			if (Number.isFinite(size) && size >= 32) {
+				root.style.setProperty('--bm-btn-size', `${size}px`);
+			}
+		}
+	}
+
+	function attachRootAtLikeRow(root, likeRow) {
+		if (!(root instanceof HTMLElement) || !(likeRow instanceof HTMLElement)) return false;
+		if (likeRow.contains(root) || root.contains(likeRow)) return false;
 		beginDomMutation();
 		try {
-			column.insertBefore(root, likeRow);
-			const rn = root.getRootNode();
-			if (rn instanceof ShadowRoot) {
-				ensureStylesInShadowRoot(rn);
-			}
-			if (getComputedStyle(column).flexDirection === 'column-reverse') {
-				const rr = root.getBoundingClientRect();
-				const lr = likeRow.getBoundingClientRect();
-				if (!(rr.top < lr.top)) {
-					if (likeRow.nextSibling) {
-						column.insertBefore(root, likeRow.nextSibling);
-					} else {
-						column.appendChild(root);
-					}
-					if (!(root.getBoundingClientRect().top < likeRow.getBoundingClientRect().top)) {
-						column.insertBefore(root, likeRow);
-					}
-				}
-			}
+			if (root.parentElement !== document.body) document.body.appendChild(root);
+			root.dataset.ytsFixedHost = '1';
+			root.dataset.bmYtsRole = SPEED_ROLE;
 		} finally {
 			endDomMutation();
 		}
-		return true;
+		return root.isConnected;
 	}
 
 	function findFirstActionBarRow(scope) {
@@ -453,25 +643,18 @@
 	}
 
 	function ensureSpeedAnchorIntact() {
-		if (!speedRootEl || !speedRootEl.isConnected) return;
-		if (!isInReelActionUi(speedRootEl)) {
-			beginDomMutation();
-			try {
-				speedRootEl.remove();
-			} finally {
-				endDomMutation();
-			}
-			speedRootEl = null;
-			invalidateScopeCache();
+		if (isToolboxControllerActive()) {
+			stopSelfForToolboxTakeover();
 			return;
 		}
-		const likeInner = findLikeInner();
-		if (!likeInner || !likeInner.isConnected) return;
-		const likeRow = findLikeRowElement(likeInner);
-		if (!likeRow || !likeRow.parentElement) return;
-		const column = likeRow.parentElement;
-		if (speedRootEl.parentElement === column && speedRootEl.nextSibling === likeRow) return;
-		attachRootAboveLikeRow(speedRootEl, likeRow);
+		if (!speedRootEl || !speedRootEl.isConnected) return;
+		if (isSpeedOnBodyHost()) {
+			syncSpeedLayoutWithNative();
+			return;
+		}
+		speedRootEl.remove();
+		speedRootEl = null;
+		invalidateScopeCache();
 	}
 
 	function getActiveShortsVideo() {
@@ -586,14 +769,21 @@
 	}
 
 	function ensureMounted() {
+		if (isToolboxControllerActive()) return false;
 		if (speedRootEl && speedRootEl.isConnected) return true;
 
 		const anchorRow = findMountAnchorRow();
-		if (!anchorRow || !anchorRow.isConnected || !anchorRow.parentElement) return false;
+		if (!anchorRow || !anchorRow.isConnected) return false;
 
 		const root = document.createElement('div');
 		root.id = ROOT_ID;
 		root.setAttribute('data-yts-speed', '1');
+		root.dataset.ytsFixedHost = '1';
+		root.dataset.bmYtsRole = SPEED_ROLE;
+		root.style.visibility = 'hidden';
+		root.style.setProperty('position', 'fixed', 'important');
+		root.style.setProperty('left', '-9999px', 'important');
+		root.style.setProperty('top', '-9999px', 'important');
 
 		const btn = document.createElement('button');
 		btn.type = 'button';
@@ -615,22 +805,11 @@
 		root.appendChild(btn);
 		root.appendChild(caption);
 
-		beginDomMutation();
-		try {
-			if (!attachRootAboveLikeRow(root, anchorRow)) {
-				const host =
-					anchorRow.closest('reel-action-bar-item-view-model') || anchorRow.parentElement;
-				if (!host || !host.parentElement) return false;
-				host.parentElement.insertBefore(root, host);
-			}
-		} finally {
-			endDomMutation();
-		}
+		if (!attachRootAtLikeRow(root, anchorRow)) return false;
 
-		const rn = root.getRootNode();
 		speedRootEl = root;
-		ensureStylesInShadowRoot(rn);
 		syncSpeedUiWithNativeLike();
+		syncSpeedLayoutWithNative();
 		applyToAllLikelyVideos();
 		return true;
 	}
@@ -649,10 +828,6 @@
 			mountDebounceTimer = null;
 		}
 		teardownVideoHooks();
-		if (mainTickInterval) {
-			clearInterval(mainTickInterval);
-			mainTickInterval = null;
-		}
 		if (speedRootEl && speedRootEl.isConnected) {
 			speedRootEl.remove();
 		}
@@ -708,7 +883,9 @@
 		if (t.closest('#' + ROOT_ID)) return false;
 		if (isInsideCommentsPanel(t)) return false;
 		if (
-			t.closest('#actions, ytd-reel-player-overlay-renderer #actions, reel-action-bar-item-view-model')
+			t.closest(
+				'#actions, ytd-reel-player-overlay-renderer #actions, reel-action-bar-view-model, reel-action-bar-item-view-model, .ytReelPlayerOverlayViewModelActionsContainer'
+			)
 		)
 			return false;
 
@@ -719,7 +896,9 @@
 		const r = v.getBoundingClientRect();
 		if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false;
 
-		const actions = document.querySelector('ytd-reel-player-overlay-renderer #actions');
+		const actions =
+			document.querySelector('ytd-reel-player-overlay-renderer reel-action-bar-view-model') ||
+			document.querySelector('ytd-reel-player-overlay-renderer #actions');
 		if (actions) {
 			const ar = actions.getBoundingClientRect();
 			if (x >= ar.left && x <= ar.right && y >= ar.top && y <= ar.bottom) return false;
@@ -864,6 +1043,15 @@
 
 	function onShortsNavigation() {
 		invalidateScopeCache();
+		if (isToolboxControllerActive()) {
+			stopSelfForToolboxTakeover();
+			return;
+		}
+		if (isSpeedOnBodyHost()) {
+			syncSpeedLayoutWithNative();
+			syncSpeedUiWithNativeLike();
+			return;
+		}
 		if (speedRootEl && speedRootEl.isConnected) {
 			beginDomMutation();
 			try {
@@ -878,6 +1066,7 @@
 	}
 
 	function tick() {
+		clearStaleToolboxControllerAttr();
 		if (isToolboxControllerActive()) {
 			stopSelfForToolboxTakeover();
 			return;
@@ -887,24 +1076,39 @@
 			return;
 		}
 		ensureSpeedAnchorIntact();
+		syncSpeedLayoutWithNative();
 		syncSpeedUiWithNativeLike();
 	}
 
-	clearStaleToolboxControllerAttr();
-	if (isToolboxControllerActive()) {
-		return;
+	function onDocumentScrollForSpeed() {
+		if (isToolboxControllerActive()) return;
+		if (isSpeedOnBodyHost()) syncSpeedLayoutWithNative();
 	}
+
+	clearStaleToolboxControllerAttr();
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', () => {
-			runMountPass();
-			initMountObserver();
+			if (!isToolboxControllerActive()) {
+				runMountPass();
+				initMountObserver();
+			}
 		});
-	} else {
+	} else if (!isToolboxControllerActive()) {
 		runMountPass();
 		initMountObserver();
 	}
 	window.addEventListener('pageshow', onShortsNavigation);
 	window.addEventListener('yt-navigate-finish', onShortsNavigation);
+	window.addEventListener('resize', onDocumentScrollForSpeed, { capture: true, passive: true });
+	document.addEventListener('scroll', onDocumentScrollForSpeed, { capture: true, passive: true });
+	new MutationObserver(() => {
+		if (isToolboxControllerActive()) stopSelfForToolboxTakeover();
+		else if (!speedRootEl || !speedRootEl.isConnected) scheduleMountPass();
+	}).observe(document.documentElement, {
+		attributes: true,
+		attributeFilter: [CONTROLLER_ATTR],
+		childList: false,
+	});
 	mainTickInterval = setInterval(tick, 2000);
 	initStorageBackedOptions();
 	installHoldListeners();
