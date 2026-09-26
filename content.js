@@ -66,6 +66,14 @@
 		} catch (_) {}
 	}
 
+	function persistDefaultSpeedIndex() {
+		try {
+			chrome.storage.local.set({
+				[STORAGE_KEY_DEFAULT_SPEED_INDEX]: currentIndex,
+			});
+		} catch (_) {}
+	}
+
 	function getEffectivePlaybackRate() {
 		return SPEEDS[holdActive ? holdSpeedIndex : currentIndex];
 	}
@@ -102,7 +110,9 @@
 				if (holdActive) applyToAllLikelyVideos();
 			}
 			if (changes[STORAGE_KEY_DEFAULT_SPEED_INDEX]) {
-				currentIndex = clampSpeedIndex(changes[STORAGE_KEY_DEFAULT_SPEED_INDEX].newValue);
+				const next = clampSpeedIndex(changes[STORAGE_KEY_DEFAULT_SPEED_INDEX].newValue);
+				if (next === currentIndex) return;
+				currentIndex = next;
 				persistSpeedIndex();
 				if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
 				applyToAllLikelyVideos();
@@ -724,6 +734,7 @@
 	function cycleSpeed() {
 		currentIndex = (currentIndex + 1) % SPEEDS.length;
 		persistSpeedIndex();
+		persistDefaultSpeedIndex();
 		if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
 		applyToAllLikelyVideos();
 	}
