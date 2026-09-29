@@ -3,6 +3,7 @@
 
 	const SPEEDS = [1, 1.5, 2, 3];
 	const ROOT_ID = 'yts-speed-root';
+	const SPEED_BUTTON_Z = '4';
 	const VIDEO_HOOK_KEY = 'bmYts3xHooked';
 	const CONTROLLER_ATTR = 'data-bm-yts-controller';
 	const TOOLBOX_ROLE = 'toolbox';
@@ -129,9 +130,17 @@
 	let scopeCache = null;
 	let scopeCacheAt = 0;
 	let speedRootEl = null;
+	// Keep the rendered Short in place while YouTube recalculates reel heights on
+	// a window resize. This deliberately uses the current DOM geometry instead of
+	// an item index, which can become stale and produce a black video surface.
+	let resizeVideoLockActive = false;
+	let resizePinnedShortId = '';
+	let resizePinnedHost = null;
+	let resizeAlignFrame = 0;
+	let resizeSettleTimer = null;
 
 	const SHADOW_STYLES = `
-#${ROOT_ID}{--bm-btn-size:48px;--bm-btn-bg:rgba(255,255,255,.1);--bm-btn-fg:#fff;--bm-btn-backdrop:blur(8px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;width:var(--bm-btn-size);margin-bottom:0;flex-shrink:0;pointer-events:auto;position:relative;z-index:2147483646}
+#${ROOT_ID}{--bm-btn-size:48px;--bm-btn-bg:rgba(255,255,255,.1);--bm-btn-fg:#fff;--bm-btn-backdrop:blur(8px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;width:var(--bm-btn-size);margin-bottom:0;flex-shrink:0;pointer-events:auto;position:relative;z-index:4}
 #${ROOT_ID}[data-bm-theme="light"]{--bm-btn-bg:rgba(0,0,0,.05);--bm-btn-fg:#0f0f0f}
 #${ROOT_ID}[data-bm-overlay-dark]{--bm-btn-bg:rgba(0,0,0,.3);--bm-btn-fg:#fff;--bm-btn-backdrop:none}
 #${ROOT_ID} .yts-speed-btn{box-sizing:border-box;width:var(--bm-btn-size);height:var(--bm-btn-size);padding:0;margin:0;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:13px;font-weight:600;line-height:1;letter-spacing:-0.02em;color:var(--bm-btn-fg,#fff);background-color:var(--bm-btn-bg,rgba(255,255,255,.1));backdrop-filter:var(--bm-btn-backdrop,blur(8px));-webkit-backdrop-filter:var(--bm-btn-backdrop,blur(8px));transition:background-color .12s ease,transform .1s ease;position:relative;overflow:hidden}
@@ -603,7 +612,7 @@
 		root.style.setProperty('left', `${Math.round(likeRect.left)}px`, 'important');
 		root.style.setProperty('top', `${nextTop}px`, 'important');
 		root.style.setProperty('width', `${Math.round(likeRect.width)}px`, 'important');
-		root.style.setProperty('z-index', '2147483646', 'important');
+		root.style.setProperty('z-index', SPEED_BUTTON_Z, 'important');
 		root.style.setProperty('pointer-events', 'auto', 'important');
 		const likeBtn = findNativeLikeButtonForStyle();
 		if (likeBtn instanceof HTMLElement) {
@@ -697,6 +706,160 @@
 			}
 		}
 		return best;
+	}
+
+	function getCurrentShortId() {
+		const match = location.pathname.match(/^\/shorts\/([^/?#]+)/);
+		return match && match[1] ? match[1] : '';
+	}
+
+	function shortIdFromHost(host) {
+		if (!(host instanceof HTMLElement)) return '';
+		const renderer =
+			host.tagName === 'YTD-REEL-VIDEO-RENDERER'
+				? host
+				: host.querySelector('ytd-reel-video-renderer');
+		if (!(renderer instanceof HTMLElement)) return '';
+		for (const id of [
+			renderer.getAttribute('reel-video-id'),
+			renderer.getAttribute('video-id'),
+			renderer.dataset.videoId,
+		]) {
+			if (id && id !== 'short' && id !== 'reel-video-renderer') return id;
+		}
+		for (const link of renderer.querySelectorAll('a[href*="/shorts/"]')) {
+			const match = `${link.getAttribute('href') || ''} ${link.href || ''}`.match(
+				/\/shorts\/([^/?#]+)/
+			);
+			if (match && match[1]) return match[1];
+		}
+		return '';
+	}
+
+	function getShortsSequenceItems() {
+		const inner = document.querySelector('#shorts-inner-container');
+		const root = inner instanceof HTMLElement ? inner : document.querySelector('ytd-shorts');
+		if (!(root instanceof HTMLElement)) return [];
+		const direct = Array.from(
+			root.querySelectorAll(
+				':scope > .reel-video-in-sequence-new, :scope > .reel-video-in-sequence'
+			)
+		);
+		return direct.length
+			? direct
+			: Array.from(
+				document.querySelectorAll('.reel-video-in-sequence-new, .reel-video-in-sequence')
+			);
+	}
+
+	function captureVisibleShortPin() {
+		if (resizeVideoLockActive) return;
+		const currentId = getCurrentShortId();
+		const video = getActiveShortsVideo();
+		const renderer = video?.closest('ytd-reel-video-renderer');
+		const fromVideo = renderer?.closest(
+			'.reel-video-in-sequence-new, .reel-video-in-sequence'
+		);
+		const items = getShortsSequenceItems();
+		const host =
+			fromVideo instanceof HTMLElement
+				? fromVideo
+				: items.find((item) => shortIdFromHost(item) === currentId) || null;
+		const id = (host && shortIdFromHost(host)) || currentId;
+		if (!id || id === 'short') return;
+		resizePinnedShortId = id;
+		if (host instanceof HTMLElement) resizePinnedHost = host;
+	}
+
+	function findPinnedShortHost() {
+		if (resizePinnedHost instanceof HTMLElement && resizePinnedHost.isConnected) {
+			if (!resizePinnedShortId || shortIdFromHost(resizePinnedHost) === resizePinnedShortId) {
+				return resizePinnedHost;
+			}
+		}
+		const found = getShortsSequenceItems().find(
+			(item) => shortIdFromHost(item) === resizePinnedShortId
+		);
+		if (found instanceof HTMLElement) resizePinnedHost = found;
+		return found instanceof HTMLElement ? found : null;
+	}
+
+	function alignPinnedShortToViewport() {
+		const host = findPinnedShortHost();
+		if (!(host instanceof HTMLElement)) return;
+		const scroller =
+			document.querySelector('#shorts-container') ||
+			document.querySelector('#shorts-inner-container');
+		if (!(scroller instanceof HTMLElement)) return;
+		const scrollerRect = scroller.getBoundingClientRect();
+		const hostRect = host.getBoundingClientRect();
+		const delta = hostRect.top - scrollerRect.top;
+		if (
+			scrollerRect.height < 8 ||
+			!Number.isFinite(delta) ||
+			Math.abs(delta) < 1 ||
+			Math.abs(delta) > scrollerRect.height * 2
+		) {
+			return;
+		}
+		const nextTop = Math.max(0, scroller.scrollTop + delta);
+		try {
+			scroller.scrollTo({ top: nextTop, behavior: 'instant' });
+		} catch (_) {
+			scroller.scrollTop = nextTop;
+		}
+	}
+
+	function scheduleResizeVideoAlignment() {
+		if (!resizeAlignFrame) {
+			resizeAlignFrame = requestAnimationFrame(() => {
+				resizeAlignFrame = 0;
+				alignPinnedShortToViewport();
+			});
+		}
+		if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
+		resizeSettleTimer = setTimeout(() => {
+			resizeSettleTimer = null;
+			requestAnimationFrame(() => {
+				alignPinnedShortToViewport();
+				resizeVideoLockActive = false;
+				captureVisibleShortPin();
+			});
+		}, 320);
+	}
+
+	function beginResizeVideoLock() {
+		if (!location.pathname.startsWith('/shorts/')) return;
+		if (!resizeVideoLockActive) {
+			captureVisibleShortPin();
+			resizeVideoLockActive = !!resizePinnedShortId;
+		}
+		if (resizeVideoLockActive) scheduleResizeVideoAlignment();
+	}
+
+	function cancelResizeVideoLockForUserNavigation() {
+		if (!resizeVideoLockActive && !resizeSettleTimer) return;
+		resizeVideoLockActive = false;
+		if (resizeAlignFrame) cancelAnimationFrame(resizeAlignFrame);
+		resizeAlignFrame = 0;
+		if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
+		resizeSettleTimer = null;
+	}
+
+	function onManualShortNavigationIntent(e) {
+		if (e.type === 'wheel' && Math.abs(e.deltaY) > 2) {
+			cancelResizeVideoLockForUserNavigation();
+			return;
+		}
+		if (e.type === 'keydown' && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'].includes(e.key)) {
+			cancelResizeVideoLockForUserNavigation();
+			return;
+		}
+		if (e.type === 'pointerdown' && e.target instanceof Element) {
+			if (e.target.closest('#navigation-button-up, #navigation-button-down, [aria-label*="Next"], [aria-label*="Previous"]')) {
+				cancelResizeVideoLockForUserNavigation();
+			}
+		}
 	}
 
 	function applyPlaybackRateTo(video) {
@@ -1061,6 +1224,9 @@
 		if (isSpeedOnBodyHost()) {
 			syncSpeedLayoutWithNative();
 			syncSpeedUiWithNativeLike();
+			if (!resizeVideoLockActive) {
+				requestAnimationFrame(captureVisibleShortPin);
+			}
 			return;
 		}
 		if (speedRootEl && speedRootEl.isConnected) {
@@ -1074,6 +1240,7 @@
 		speedRootEl = null;
 		initMountObserver();
 		scheduleMountPass();
+		if (!resizeVideoLockActive) requestAnimationFrame(captureVisibleShortPin);
 	}
 
 	function tick() {
@@ -1089,11 +1256,18 @@
 		ensureSpeedAnchorIntact();
 		syncSpeedLayoutWithNative();
 		syncSpeedUiWithNativeLike();
+		captureVisibleShortPin();
 	}
 
 	function onDocumentScrollForSpeed() {
 		if (isToolboxControllerActive()) return;
 		if (isSpeedOnBodyHost()) syncSpeedLayoutWithNative();
+		captureVisibleShortPin();
+	}
+
+	function onWindowResize() {
+		beginResizeVideoLock();
+		onDocumentScrollForSpeed();
 	}
 
 	clearStaleToolboxControllerAttr();
@@ -1110,8 +1284,11 @@
 	}
 	window.addEventListener('pageshow', onShortsNavigation);
 	window.addEventListener('yt-navigate-finish', onShortsNavigation);
-	window.addEventListener('resize', onDocumentScrollForSpeed, { capture: true, passive: true });
+	window.addEventListener('resize', onWindowResize, { capture: true, passive: true });
 	document.addEventListener('scroll', onDocumentScrollForSpeed, { capture: true, passive: true });
+	document.addEventListener('wheel', onManualShortNavigationIntent, { capture: true, passive: true });
+	document.addEventListener('keydown', onManualShortNavigationIntent, true);
+	document.addEventListener('pointerdown', onManualShortNavigationIntent, true);
 	new MutationObserver(() => {
 		if (isToolboxControllerActive()) stopSelfForToolboxTakeover();
 		else if (!speedRootEl || !speedRootEl.isConnected) scheduleMountPass();
@@ -1123,4 +1300,5 @@
 	mainTickInterval = setInterval(tick, 2000);
 	initStorageBackedOptions();
 	installHoldListeners();
+	requestAnimationFrame(captureVisibleShortPin);
 })();

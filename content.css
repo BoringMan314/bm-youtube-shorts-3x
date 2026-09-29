@@ -13,13 +13,13 @@
   pointer-events: auto;
   row-gap: 0;
   position: relative;
-  z-index: 2147483646;
+  z-index: 4;
   overflow: visible;
 }
 
 html body #yts-speed-root {
   position: fixed !important;
-  z-index: 2147483646 !important;
+  z-index: 4 !important;
   left: -9999px;
   top: -9999px;
 }
