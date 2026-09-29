@@ -138,6 +138,14 @@
 	let resizePinnedHost = null;
 	let resizeAlignFrame = 0;
 	let resizeSettleTimer = null;
+	let resizeRetryTimer = null;
+	let shortsResizeObserver = null;
+	let observedShortsBoxes = [];
+	let resizeCorrectionAttempts = 0;
+	let explicitShortNavUntil = 0;
+	let pendingShortsSwipe = null;
+	const RESIZE_SETTLE_MS = 1600;
+	const EXPLICIT_SHORT_NAV_MS = 2200;
 
 	const SHADOW_STYLES = `
 #${ROOT_ID}{--bm-btn-size:48px;--bm-btn-bg:rgba(255,255,255,.1);--bm-btn-fg:#fff;--bm-btn-backdrop:blur(8px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;width:var(--bm-btn-size);margin-bottom:0;flex-shrink:0;pointer-events:auto;position:relative;z-index:4}
@@ -549,6 +557,63 @@
 		return isButtonSizedActionRect(rect);
 	}
 
+	function isVisibleNativeRailButton(btn) {
+		if (!(btn instanceof HTMLElement)) return false;
+		if (speedRootEl && speedRootEl.contains(btn)) return false;
+		if (!isInReelActionUi(btn)) return false;
+		const rect = btn.getBoundingClientRect();
+		if (!isButtonSizedActionRect(rect)) return false;
+		const style = getComputedStyle(btn);
+		return style.display !== 'none' && style.visibility !== 'hidden';
+	}
+
+	function findVisibleNativeLikeButton() {
+		const scoped = findNativeLikeButtonForStyle();
+		if (isVisibleNativeRailButton(scoped)) return scoped;
+		const nodes = document.querySelectorAll(
+			'like-button-view-model button, #like-button button, segmented-like-button-view-model button, reel-action-bar-view-model button'
+		);
+		let best = null;
+		let bestScore = -1;
+		const vw = window.innerWidth;
+		const vh = window.innerHeight;
+		for (const btn of nodes) {
+			if (!(btn instanceof HTMLElement) || !isVisibleNativeRailButton(btn)) continue;
+			const label = `${btn.getAttribute('aria-label') || ''} ${btn.getAttribute('title') || ''}`;
+			const host = btn.closest(
+				'like-button-view-model, #like-button, segmented-like-button-view-model'
+			);
+			if (!host && !/(like|喜歡|点赞|讚|いいね)/i.test(label)) continue;
+			const rect = btn.getBoundingClientRect();
+			const visibleArea =
+				Math.max(0, Math.min(rect.right, vw) - Math.max(rect.left, 0)) *
+				Math.max(0, Math.min(rect.bottom, vh) - Math.max(rect.top, 0));
+			const score = visibleArea * (1.2 - Math.abs((rect.top + rect.bottom) / 2 - vh / 2) / vh);
+			if (score > bestScore) {
+				best = btn;
+				bestScore = score;
+			}
+		}
+		return best;
+	}
+
+	function measureNativeRailPitch(btn) {
+		if (!(btn instanceof HTMLElement)) return 92;
+		const row = findLikeRowElement(btn);
+		const rail = row?.parentElement || btn.closest('reel-action-bar-view-model, #actions');
+		if (!(rail instanceof HTMLElement)) return 92;
+		const buttons = Array.from(rail.children)
+			.map((child) => child.querySelector?.('button'))
+			.filter((child) => child instanceof HTMLElement);
+		const index = buttons.findIndex((candidate) => candidate === btn || candidate.contains(btn));
+		const next = index >= 0 ? buttons[index + 1] : null;
+		if (next instanceof HTMLElement) {
+			const pitch = next.getBoundingClientRect().top - btn.getBoundingClientRect().top;
+			if (pitch >= 56 && pitch <= 180) return pitch;
+		}
+		return 92;
+	}
+
 	function getRowAnchorRect(row) {
 		if (!(row instanceof HTMLElement)) return null;
 		const rr = row.getBoundingClientRect();
@@ -596,13 +661,14 @@
 			stopSelfForToolboxTakeover();
 			return;
 		}
-		const likeRow = findMountAnchorRow();
-		const likeRect = getRowAnchorRect(likeRow);
-		if (!(likeRow instanceof HTMLElement) || !likeRect) {
+		const likeBtn = findVisibleNativeLikeButton();
+		if (!(likeBtn instanceof HTMLElement)) {
 			if (!speedHasStableFixedPosition(root)) root.style.visibility = 'hidden';
 			return;
 		}
-		const nextTop = Math.round(likeRect.top - likeRect.height);
+		const likeRect = likeBtn.getBoundingClientRect();
+		const pitch = measureNativeRailPitch(likeBtn);
+		const nextTop = Math.round(likeRect.top - pitch);
 		if (nextTop < -24 || nextTop > window.innerHeight - 24) {
 			if (!speedHasStableFixedPosition(root)) root.style.visibility = 'hidden';
 			return;
@@ -614,13 +680,9 @@
 		root.style.setProperty('width', `${Math.round(likeRect.width)}px`, 'important');
 		root.style.setProperty('z-index', SPEED_BUTTON_Z, 'important');
 		root.style.setProperty('pointer-events', 'auto', 'important');
-		const likeBtn = findNativeLikeButtonForStyle();
-		if (likeBtn instanceof HTMLElement) {
-			const rect = likeBtn.getBoundingClientRect();
-			const size = Math.round(Math.max(rect.width, rect.height));
-			if (Number.isFinite(size) && size >= 32) {
-				root.style.setProperty('--bm-btn-size', `${size}px`);
-			}
+		const size = Math.round(Math.max(likeRect.width, likeRect.height));
+		if (Number.isFinite(size) && size >= 32) {
+			root.style.setProperty('--bm-btn-size', `${size}px`);
 		}
 	}
 
@@ -640,14 +702,19 @@
 
 	function findFirstActionBarRow(scope) {
 		if (!(scope instanceof HTMLElement)) return null;
-		const actions = scope.querySelector('#actions');
-		if (!(actions instanceof HTMLElement)) return null;
-		for (const child of actions.children) {
-			if (!(child instanceof HTMLElement)) continue;
-			if (!isInReelActionUi(child)) continue;
-			const btn = child.querySelector('button');
-			if (!(btn instanceof HTMLButtonElement)) continue;
-			return findLikeRowElement(btn) || child;
+		const actionRoots = [
+			scope.querySelector('#actions'),
+			scope.querySelector('reel-action-bar-view-model'),
+			scope.querySelector('.ytReelPlayerOverlayViewModelActionsContainer'),
+		].filter((root) => root instanceof HTMLElement);
+		for (const actions of actionRoots) {
+			for (const child of actions.children) {
+				if (!(child instanceof HTMLElement)) continue;
+				if (!isInReelActionUi(child)) continue;
+				const btn = child.querySelector('button');
+				if (!(btn instanceof HTMLButtonElement)) continue;
+				return findLikeRowElement(btn) || child;
+			}
 		}
 		return null;
 	}
@@ -719,21 +786,26 @@
 			host.tagName === 'YTD-REEL-VIDEO-RENDERER'
 				? host
 				: host.querySelector('ytd-reel-video-renderer');
-		if (!(renderer instanceof HTMLElement)) return '';
-		for (const id of [
-			renderer.getAttribute('reel-video-id'),
-			renderer.getAttribute('video-id'),
-			renderer.dataset.videoId,
-		]) {
-			if (id && id !== 'short' && id !== 'reel-video-renderer') return id;
+		if (renderer instanceof HTMLElement) {
+			for (const id of [
+				renderer.getAttribute('reel-video-id'),
+				renderer.getAttribute('video-id'),
+				renderer.dataset.videoId,
+			]) {
+				if (id && id !== 'short' && id !== 'reel-video-renderer') return id;
+			}
+			for (const link of renderer.querySelectorAll('a[href*="/shorts/"]')) {
+				const match = `${link.getAttribute('href') || ''} ${link.href || ''}`.match(
+					/\/shorts\/([^/?#]+)/
+				);
+				if (match && match[1]) return match[1];
+			}
 		}
-		for (const link of renderer.querySelectorAll('a[href*="/shorts/"]')) {
-			const match = `${link.getAttribute('href') || ''} ${link.href || ''}`.match(
-				/\/shorts\/([^/?#]+)/
-			);
-			if (match && match[1]) return match[1];
-		}
-		return '';
+		const blob = `${host.getAttribute('style') || ''} ${
+			host.querySelector('[style*="/vi/"], [src*="/vi/"]')?.getAttribute('style') || ''
+		} ${host.querySelector('[src*="/vi/"]')?.getAttribute('src') || ''}`;
+		const thumbnailId = blob.match(/\/vi\/([^/]+)\//);
+		return thumbnailId && thumbnailId[1] ? thumbnailId[1] : '';
 	}
 
 	function getShortsSequenceItems() {
@@ -752,8 +824,8 @@
 			);
 	}
 
-	function captureVisibleShortPin() {
-		if (resizeVideoLockActive) return;
+	function captureVisibleShortPin(force = false) {
+		if (resizeVideoLockActive && !force) return;
 		const currentId = getCurrentShortId();
 		const video = getActiveShortsVideo();
 		const renderer = video?.closest('ytd-reel-video-renderer');
@@ -771,6 +843,15 @@
 		if (host instanceof HTMLElement) resizePinnedHost = host;
 	}
 
+	function isExplicitShortNavigation() {
+		return Date.now() < explicitShortNavUntil;
+	}
+
+	function noteExplicitShortNavigation() {
+		explicitShortNavUntil = Date.now() + EXPLICIT_SHORT_NAV_MS;
+		cancelResizeVideoLockForUserNavigation();
+	}
+
 	function findPinnedShortHost() {
 		if (resizePinnedHost instanceof HTMLElement && resizePinnedHost.isConnected) {
 			if (!resizePinnedShortId || shortIdFromHost(resizePinnedHost) === resizePinnedShortId) {
@@ -785,29 +866,59 @@
 	}
 
 	function alignPinnedShortToViewport() {
+		const currentId = getCurrentShortId();
+		if (currentId && resizePinnedShortId && currentId !== resizePinnedShortId) {
+			// A user gesture is allowed to change the pin. Without one, this is the
+			// resize-induced Shorts route jump we are protecting against, so retain
+			// the original host and scroll it back into the viewport.
+			if (isExplicitShortNavigation()) {
+				captureVisibleShortPin(true);
+				return;
+			}
+		}
 		const host = findPinnedShortHost();
 		if (!(host instanceof HTMLElement)) return;
-		const scroller =
-			document.querySelector('#shorts-container') ||
-			document.querySelector('#shorts-inner-container');
-		if (!(scroller instanceof HTMLElement)) return;
-		const scrollerRect = scroller.getBoundingClientRect();
-		const hostRect = host.getBoundingClientRect();
-		const delta = hostRect.top - scrollerRect.top;
+		const seen = new Set();
+		for (const selector of ['#shorts-container', '#shorts-inner-container']) {
+			const scroller = document.querySelector(selector);
+			if (!(scroller instanceof HTMLElement) || seen.has(scroller)) continue;
+			seen.add(scroller);
+			const scrollerRect = scroller.getBoundingClientRect();
+			const hostRect = host.getBoundingClientRect();
+			const delta = hostRect.top - scrollerRect.top;
+			if (
+				scrollerRect.height < 8 ||
+				!Number.isFinite(delta) ||
+				Math.abs(delta) < 1 ||
+				Math.abs(delta) > scrollerRect.height * 2
+			) {
+				continue;
+			}
+			const nextTop = Math.max(0, scroller.scrollTop + delta);
+			try {
+				scroller.scrollTo({ top: nextTop, behavior: 'instant' });
+			} catch (_) {
+				scroller.scrollTop = nextTop;
+			}
+		}
+	}
+
+	function observeShortsResize() {
+		if (!('ResizeObserver' in window)) return;
+		const boxes = ['#shorts-container', '#shorts-inner-container']
+			.map((selector) => document.querySelector(selector))
+			.filter((el) => el instanceof HTMLElement);
 		if (
-			scrollerRect.height < 8 ||
-			!Number.isFinite(delta) ||
-			Math.abs(delta) < 1 ||
-			Math.abs(delta) > scrollerRect.height * 2
-		) {
-			return;
-		}
-		const nextTop = Math.max(0, scroller.scrollTop + delta);
-		try {
-			scroller.scrollTo({ top: nextTop, behavior: 'instant' });
-		} catch (_) {
-			scroller.scrollTop = nextTop;
-		}
+			shortsResizeObserver &&
+			boxes.length === observedShortsBoxes.length &&
+			boxes.every((box, index) => box === observedShortsBoxes[index])
+		) return;
+		if (shortsResizeObserver) shortsResizeObserver.disconnect();
+		observedShortsBoxes = boxes;
+		shortsResizeObserver = new ResizeObserver(() => {
+			if (resizeVideoLockActive) scheduleResizeVideoAlignment();
+		});
+		boxes.forEach((box) => shortsResizeObserver.observe(box));
 	}
 
 	function scheduleResizeVideoAlignment() {
@@ -822,10 +933,15 @@
 			resizeSettleTimer = null;
 			requestAnimationFrame(() => {
 				alignPinnedShortToViewport();
+				if (resizeCorrectionAttempts++ < 2) {
+					if (resizeRetryTimer) clearTimeout(resizeRetryTimer);
+					resizeRetryTimer = setTimeout(scheduleResizeVideoAlignment, 180);
+					return;
+				}
 				resizeVideoLockActive = false;
-				captureVisibleShortPin();
+				captureVisibleShortPin(true);
 			});
-		}, 320);
+		}, RESIZE_SETTLE_MS);
 	}
 
 	function beginResizeVideoLock() {
@@ -833,6 +949,8 @@
 		if (!resizeVideoLockActive) {
 			captureVisibleShortPin();
 			resizeVideoLockActive = !!resizePinnedShortId;
+			resizeCorrectionAttempts = 0;
+			observeShortsResize();
 		}
 		if (resizeVideoLockActive) scheduleResizeVideoAlignment();
 	}
@@ -844,20 +962,44 @@
 		resizeAlignFrame = 0;
 		if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
 		resizeSettleTimer = null;
+		if (resizeRetryTimer) clearTimeout(resizeRetryTimer);
+		resizeRetryTimer = null;
+		resizeCorrectionAttempts = 0;
 	}
 
 	function onManualShortNavigationIntent(e) {
 		if (e.type === 'wheel' && Math.abs(e.deltaY) > 2) {
-			cancelResizeVideoLockForUserNavigation();
+			noteExplicitShortNavigation();
 			return;
 		}
 		if (e.type === 'keydown' && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'].includes(e.key)) {
-			cancelResizeVideoLockForUserNavigation();
+			noteExplicitShortNavigation();
 			return;
 		}
 		if (e.type === 'pointerdown' && e.target instanceof Element) {
-			if (e.target.closest('#navigation-button-up, #navigation-button-down, [aria-label*="Next"], [aria-label*="Previous"]')) {
-				cancelResizeVideoLockForUserNavigation();
+			if (
+				e.target.closest(
+					'#navigation-button-up, #navigation-button-down, .navigation-container, [data-navigation-direction], [aria-label*="Next"], [aria-label*="Previous"], [aria-label*="上一"], [aria-label*="下一"], [aria-label*="前の動画"], [aria-label*="次の動画"]'
+				)
+			) {
+				noteExplicitShortNavigation();
+				return;
+			}
+			if (e.isPrimary !== false && e.target.closest('#shorts-container, #shorts-player, ytd-reel-video-renderer')) {
+				pendingShortsSwipe = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+			}
+		}
+		if (e.type === 'pointerup' || e.type === 'pointercancel') {
+			const start = pendingShortsSwipe;
+			pendingShortsSwipe = null;
+			if (
+				e.type === 'pointerup' &&
+				start &&
+				start.pointerId === e.pointerId &&
+				Math.abs(e.clientY - start.y) >= 28 &&
+				Math.abs(e.clientY - start.y) > Math.abs(e.clientX - start.x)
+			) {
+				noteExplicitShortNavigation();
 			}
 		}
 	}
@@ -946,8 +1088,8 @@
 		if (isToolboxControllerActive()) return false;
 		if (speedRootEl && speedRootEl.isConnected) return true;
 
-		const anchorRow = findMountAnchorRow();
-		if (!anchorRow || !anchorRow.isConnected) return false;
+		const likeBtn = findVisibleNativeLikeButton();
+		if (!(likeBtn instanceof HTMLElement)) return false;
 
 		const root = document.createElement('div');
 		root.id = ROOT_ID;
@@ -979,7 +1121,7 @@
 		root.appendChild(btn);
 		root.appendChild(caption);
 
-		if (!attachRootAtLikeRow(root, anchorRow)) return false;
+		if (!attachRootAtLikeRow(root, likeBtn)) return false;
 
 		speedRootEl = root;
 		syncSpeedUiWithNativeLike();
@@ -1002,6 +1144,12 @@
 			mountDebounceTimer = null;
 		}
 		teardownVideoHooks();
+		cancelResizeVideoLockForUserNavigation();
+		if (shortsResizeObserver) {
+			shortsResizeObserver.disconnect();
+			shortsResizeObserver = null;
+			observedShortsBoxes = [];
+		}
 		if (speedRootEl && speedRootEl.isConnected) {
 			speedRootEl.remove();
 		}
@@ -1202,8 +1350,10 @@
 	function initMountObserver() {
 		if (mountObserver) return;
 		if (speedRootEl && speedRootEl.isConnected) return;
-		const observeRoot = document.querySelector('ytd-shorts');
-		if (!observeRoot) return;
+		// document_idle can run before YouTube creates ytd-shorts. Observe the
+		// document in that case so the first action rail still causes a mount.
+		const observeRoot = document.querySelector('ytd-shorts') || document.documentElement;
+		if (!(observeRoot instanceof Node)) return;
 		mountObserver = new MutationObserver(() => {
 			if (isDomMutating()) return;
 			if (speedRootEl && speedRootEl.isConnected) {
@@ -1217,6 +1367,15 @@
 
 	function onShortsNavigation() {
 		invalidateScopeCache();
+		const currentId = getCurrentShortId();
+		if (resizeVideoLockActive && currentId && currentId !== resizePinnedShortId) {
+			if (isExplicitShortNavigation()) {
+				cancelResizeVideoLockForUserNavigation();
+				captureVisibleShortPin(true);
+			} else {
+				scheduleResizeVideoAlignment();
+			}
+		}
 		if (isToolboxControllerActive()) {
 			stopSelfForToolboxTakeover();
 			return;
@@ -1270,6 +1429,11 @@
 		onDocumentScrollForSpeed();
 	}
 
+	function onBrowserHistoryShortNavigation() {
+		if (!location.pathname.startsWith('/shorts/')) return;
+		noteExplicitShortNavigation();
+	}
+
 	clearStaleToolboxControllerAttr();
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', () => {
@@ -1285,10 +1449,20 @@
 	window.addEventListener('pageshow', onShortsNavigation);
 	window.addEventListener('yt-navigate-finish', onShortsNavigation);
 	window.addEventListener('resize', onWindowResize, { capture: true, passive: true });
+	window.addEventListener('orientationchange', onWindowResize, { capture: true, passive: true });
+	if (window.visualViewport) {
+		window.visualViewport.addEventListener('resize', onWindowResize, {
+			capture: true,
+			passive: true,
+		});
+	}
 	document.addEventListener('scroll', onDocumentScrollForSpeed, { capture: true, passive: true });
 	document.addEventListener('wheel', onManualShortNavigationIntent, { capture: true, passive: true });
 	document.addEventListener('keydown', onManualShortNavigationIntent, true);
 	document.addEventListener('pointerdown', onManualShortNavigationIntent, true);
+	document.addEventListener('pointerup', onManualShortNavigationIntent, true);
+	document.addEventListener('pointercancel', onManualShortNavigationIntent, true);
+	window.addEventListener('popstate', onBrowserHistoryShortNavigation, true);
 	new MutationObserver(() => {
 		if (isToolboxControllerActive()) stopSelfForToolboxTakeover();
 		else if (!speedRootEl || !speedRootEl.isConnected) scheduleMountPass();
