@@ -142,9 +142,11 @@
 	let shortsResizeObserver = null;
 	let observedShortsBoxes = [];
 	let resizeCorrectionAttempts = 0;
+	let miniPlayerResizeQuietUntil = 0;
 	let explicitShortNavUntil = 0;
 	let pendingShortsSwipe = null;
 	const RESIZE_SETTLE_MS = 1600;
+	const MINI_PLAYER_RESIZE_QUIET_MS = 5000;
 	const EXPLICIT_SHORT_NAV_MS = 2200;
 
 	const SHADOW_STYLES = `
@@ -666,18 +668,20 @@
 			if (!speedHasStableFixedPosition(root)) root.style.visibility = 'hidden';
 			return;
 		}
-		const likeRect = likeBtn.getBoundingClientRect();
-		const pitch = measureNativeRailPitch(likeBtn);
-		const nextTop = Math.round(likeRect.top - pitch);
-		if (nextTop < -24 || nextTop > window.innerHeight - 24) {
+		const likeRow = findLikeRowElement(likeBtn) || likeBtn;
+		if (!attachRootAtLikeRow(root, likeRow)) {
 			if (!speedHasStableFixedPosition(root)) root.style.visibility = 'hidden';
 			return;
 		}
+		const likeRect = likeBtn.getBoundingClientRect();
+		const pitch = measureNativeRailPitch(likeBtn);
 		root.style.visibility = 'visible';
-		root.style.setProperty('position', 'fixed', 'important');
-		root.style.setProperty('left', `${Math.round(likeRect.left)}px`, 'important');
-		root.style.setProperty('top', `${nextTop}px`, 'important');
+		root.style.setProperty('position', 'relative', 'important');
+		root.style.setProperty('left', '0px', 'important');
+		root.style.setProperty('top', '0px', 'important');
 		root.style.setProperty('width', `${Math.round(likeRect.width)}px`, 'important');
+		root.style.setProperty('height', `${pitch}px`, 'important');
+		root.style.setProperty('margin', '0px', 'important');
 		root.style.setProperty('z-index', SPEED_BUTTON_Z, 'important');
 		root.style.setProperty('pointer-events', 'auto', 'important');
 		const size = Math.round(Math.max(likeRect.width, likeRect.height));
@@ -685,21 +689,28 @@
 			root.style.setProperty('--bm-btn-size', `${size}px`);
 		}
 	}
-
 	function attachRootAtLikeRow(root, likeRow) {
 		if (!(root instanceof HTMLElement) || !(likeRow instanceof HTMLElement)) return false;
 		if (likeRow.contains(root) || root.contains(likeRow)) return false;
+		const actionBar = likeRow.closest('reel-action-bar-view-model, #actions');
+		const parent = actionBar instanceof HTMLElement ? actionBar : likeRow.parentElement;
+		if (!(parent instanceof HTMLElement)) return false;
 		beginDomMutation();
 		try {
-			if (root.parentElement !== document.body) document.body.appendChild(root);
-			root.dataset.ytsFixedHost = '1';
+			// Put the speed control in the native action rail's first visual slot,
+			// ahead of optional account-specific actions such as Gemini.
+			const reverse = getComputedStyle(parent).flexDirection === 'column-reverse';
+			parent.insertBefore(root, reverse ? null : parent.firstElementChild);
+			delete root.dataset.ytsFixedHost;
 			root.dataset.bmYtsRole = SPEED_ROLE;
+			root.style.setProperty('position', 'relative', 'important');
+			root.style.setProperty('left', '0px', 'important');
+			root.style.setProperty('top', '0px', 'important');
 		} finally {
 			endDomMutation();
 		}
 		return root.isConnected;
 	}
-
 	function findFirstActionBarRow(scope) {
 		if (!(scope instanceof HTMLElement)) return null;
 		const actionRoots = [
@@ -734,15 +745,12 @@
 			return;
 		}
 		if (!speedRootEl || !speedRootEl.isConnected) return;
-		if (isSpeedOnBodyHost()) {
-			syncSpeedLayoutWithNative();
-			return;
-		}
-		speedRootEl.remove();
-		speedRootEl = null;
-		invalidateScopeCache();
+		const likeBtn = findVisibleNativeLikeButton();
+		if (!(likeBtn instanceof HTMLElement)) return;
+		const likeRow = findLikeRowElement(likeBtn) || likeBtn;
+		attachRootAtLikeRow(speedRootEl, likeRow);
+		syncSpeedLayoutWithNative();
 	}
-
 	function getActiveShortsVideo() {
 		const selectors = ['ytd-reel-video-renderer video', 'ytd-shorts video', '#shorts-player video'];
 		const seen = new Set();
@@ -866,6 +874,17 @@
 	}
 
 	function alignPinnedShortToViewport() {
+		// The toolbox build already owns resize pinning on this page. Running a
+		// second independent scroll lock here can make the two builds fight and
+		// snap the feed to another Short while the viewport is changing.
+		if (isToolboxControllerActive()) {
+			cancelResizeVideoLockForUserNavigation();
+			return;
+		}
+		if (isMiniPlayerResizeTransition()) {
+			cancelResizeVideoLockForUserNavigation();
+			return;
+		}
 		const currentId = getCurrentShortId();
 		if (currentId && resizePinnedShortId && currentId !== resizePinnedShortId) {
 			// A user gesture is allowed to change the pin. Without one, this is the
@@ -932,6 +951,10 @@
 		resizeSettleTimer = setTimeout(() => {
 			resizeSettleTimer = null;
 			requestAnimationFrame(() => {
+				if (isMiniPlayerResizeTransition()) {
+					cancelResizeVideoLockForUserNavigation();
+					return;
+				}
 				alignPinnedShortToViewport();
 				if (resizeCorrectionAttempts++ < 2) {
 					if (resizeRetryTimer) clearTimeout(resizeRetryTimer);
@@ -946,6 +969,19 @@
 
 	function beginResizeVideoLock() {
 		if (!location.pathname.startsWith('/shorts/')) return;
+		if (isToolboxControllerActive()) {
+			cancelResizeVideoLockForUserNavigation();
+			return;
+		}
+		if (isMiniPlayerResizeTransition()) {
+			cancelResizeVideoLockForUserNavigation();
+			captureVisibleShortPin(true);
+			return;
+		}
+		if (resizeRetryTimer) {
+			clearTimeout(resizeRetryTimer);
+			resizeRetryTimer = null;
+		}
 		if (!resizeVideoLockActive) {
 			captureVisibleShortPin();
 			resizeVideoLockActive = !!resizePinnedShortId;
@@ -953,6 +989,16 @@
 			observeShortsResize();
 		}
 		if (resizeVideoLockActive) scheduleResizeVideoAlignment();
+	}
+
+	function isMiniPlayerResizeTransition() {
+		if (document.body?.matches('body[class*="efyt-mini-player"]')) {
+			// EFYT can briefly drop its size class while changing window presets.
+			// Keep the resize pin released across that class hand-off.
+			miniPlayerResizeQuietUntil = Date.now() + MINI_PLAYER_RESIZE_QUIET_MS;
+			return true;
+		}
+		return Date.now() < miniPlayerResizeQuietUntil;
 	}
 
 	function cancelResizeVideoLockForUserNavigation() {
@@ -1094,7 +1140,6 @@
 		const root = document.createElement('div');
 		root.id = ROOT_ID;
 		root.setAttribute('data-yts-speed', '1');
-		root.dataset.ytsFixedHost = '1';
 		root.dataset.bmYtsRole = SPEED_ROLE;
 		root.style.visibility = 'hidden';
 		root.style.setProperty('position', 'fixed', 'important');
@@ -1121,7 +1166,7 @@
 		root.appendChild(btn);
 		root.appendChild(caption);
 
-		if (!attachRootAtLikeRow(root, likeBtn)) return false;
+		if (!attachRootAtLikeRow(root, findLikeRowElement(likeBtn) || likeBtn)) return false;
 
 		speedRootEl = root;
 		syncSpeedUiWithNativeLike();
