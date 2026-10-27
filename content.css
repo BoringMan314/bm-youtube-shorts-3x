@@ -48,7 +48,7 @@ html body #yts-speed-root {
   align-items: center;
   justify-content: center;
   font-family: "Roboto", "YouTube Noto", Arial, sans-serif;
-  font-size: 20px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1;
   letter-spacing: -0.02em;
@@ -58,7 +58,7 @@ html body #yts-speed-root {
   background-color: var(--bm-btn-bg, rgba(255, 255, 255, 0.1));
   backdrop-filter: var(--bm-btn-backdrop, blur(8px));
   -webkit-backdrop-filter: var(--bm-btn-backdrop, blur(8px));
-  transition: background-color 0.12s ease, transform 0.1s ease;
+  transition: background-color 0.12s ease;
 }
 
 #yts-speed-root .yts-speed-btn::after {
@@ -102,7 +102,7 @@ html body #yts-speed-root {
 
 #yts-speed-root .yts-speed-btn:active {
   filter: none;
-  transform: scale(0.96);
+  transform: none;
 }
 
 #yts-speed-root .yts-speed-btn > span {

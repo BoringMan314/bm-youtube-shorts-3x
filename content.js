@@ -99,7 +99,7 @@
 						persistSpeedIndex();
 					}
 					if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
-					applyToAllLikelyVideos();
+					applyToActiveShortsVideo();
 				}
 			);
 		} catch (_) {}
@@ -110,7 +110,7 @@
 			if (areaName !== 'local') return;
 			if (changes[STORAGE_KEY_HOLD_SPEED_INDEX]) {
 				holdSpeedIndex = clampSpeedIndex(changes[STORAGE_KEY_HOLD_SPEED_INDEX].newValue);
-				if (holdActive) applyToAllLikelyVideos();
+				if (holdActive) applyToActiveShortsVideo();
 			}
 			if (changes[STORAGE_KEY_DEFAULT_SPEED_INDEX]) {
 				const next = clampSpeedIndex(changes[STORAGE_KEY_DEFAULT_SPEED_INDEX].newValue);
@@ -118,7 +118,7 @@
 				currentIndex = next;
 				persistSpeedIndex();
 				if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
-				applyToAllLikelyVideos();
+				applyToActiveShortsVideo();
 			}
 		});
 	} catch (_) {}
@@ -131,13 +131,14 @@
 	let lastMountWorkAt = 0;
 	let scopeCache = null;
 	let scopeCacheAt = 0;
+	let scopeCacheShortId = '';
 	let speedRootEl = null;
 
 	const SHADOW_STYLES = `
 #${ROOT_ID}{--bm-btn-size:48px;--bm-btn-bg:rgba(255,255,255,.1);--bm-btn-fg:#fff;--bm-btn-backdrop:blur(8px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;width:var(--bm-btn-size);margin-bottom:0;flex-shrink:0;pointer-events:auto;position:relative;z-index:4}
 #${ROOT_ID}[data-bm-theme="light"]{--bm-btn-bg:rgba(0,0,0,.05);--bm-btn-fg:#0f0f0f}
 #${ROOT_ID}[data-bm-overlay-dark]{--bm-btn-bg:rgba(0,0,0,.3);--bm-btn-fg:#fff;--bm-btn-backdrop:none}
-#${ROOT_ID} .yts-speed-btn{box-sizing:border-box;width:var(--bm-btn-size);height:var(--bm-btn-size);padding:0;margin:0;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:13px;font-weight:600;line-height:1;letter-spacing:-0.02em;color:var(--bm-btn-fg,#fff);background-color:var(--bm-btn-bg,rgba(255,255,255,.1));backdrop-filter:var(--bm-btn-backdrop,blur(8px));-webkit-backdrop-filter:var(--bm-btn-backdrop,blur(8px));transition:background-color .12s ease,transform .1s ease;position:relative;overflow:hidden}
+#${ROOT_ID} .yts-speed-btn{box-sizing:border-box;width:var(--bm-btn-size);height:var(--bm-btn-size);padding:0;margin:0;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:13px;font-weight:600;line-height:1;letter-spacing:-0.02em;color:var(--bm-btn-fg,#fff);background-color:var(--bm-btn-bg,rgba(255,255,255,.1));backdrop-filter:var(--bm-btn-backdrop,blur(8px));-webkit-backdrop-filter:var(--bm-btn-backdrop,blur(8px));transition:background-color .12s ease;position:relative;overflow:hidden}
 #${ROOT_ID} .yts-speed-btn::after{content:"";position:absolute;inset:0;border-radius:inherit;background:transparent;pointer-events:none}
 #${ROOT_ID}[data-bm-theme="dark"] .yts-speed-btn{color:var(--bm-btn-fg,#fff);background-color:var(--bm-btn-bg,rgba(255,255,255,.1))}
 #${ROOT_ID}[data-bm-theme="light"] .yts-speed-btn{color:var(--bm-btn-fg,#0f0f0f);background-color:var(--bm-btn-bg,rgba(0,0,0,.05))}
@@ -145,7 +146,7 @@
 #${ROOT_ID} .yts-speed-btn:hover{filter:none;background-color:var(--bm-btn-bg,rgba(255,255,255,.1))}
 #${ROOT_ID} .yts-speed-btn:hover::after{background:rgba(255,255,255,.1)}
 #${ROOT_ID}[data-bm-theme="light"]:not([data-bm-overlay-dark]) .yts-speed-btn:hover::after{background:rgba(0,0,0,.06)}
-#${ROOT_ID} .yts-speed-btn:active{filter:none;transform:scale(.96)}
+#${ROOT_ID} .yts-speed-btn:active{filter:none;transform:none}
 #${ROOT_ID} .yts-speed-btn:active::after{background:rgba(255,255,255,.16)}
 #${ROOT_ID} .yts-speed-caption{margin-top:6px;max-width:56px;text-align:center;font-family:Roboto,"YouTube Noto",Arial,sans-serif;font-size:12px;font-weight:400;line-height:1.2;white-space:nowrap;position:relative;z-index:1}
 #${ROOT_ID}[data-bm-theme="dark"] .yts-speed-caption{color:#fff}
@@ -331,23 +332,6 @@
 		return SPEEDS[currentIndex];
 	}
 
-	function findSpeedIndexByRate(rate) {
-		for (let i = 0; i < SPEEDS.length; i++) {
-			if (Math.abs(SPEEDS[i] - rate) < 0.01) return i;
-		}
-		return -1;
-	}
-
-	function syncIndexFromObservedRate(rate) {
-		if (holdActive) return false;
-		const idx = findSpeedIndexByRate(rate);
-		if (idx < 0 || idx === currentIndex) return false;
-		currentIndex = idx;
-		persistSpeedIndex();
-		if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
-		return true;
-	}
-
 	function formatSpeedLabel(s) {
 		if (Number.isInteger(s)) return `${s}×`;
 		const t = String(s).replace(/\.0+$/, '');
@@ -436,12 +420,15 @@
 	function isInsideCommentsPanel(el) {
 		if (!el) return false;
 		return !!el.closest(
-			'ytd-comments-panel, ytd-engagement-panel, ytd-engagement-panel-section, ytd-comment-renderer, ytd-comment-thread-renderer, ytd-comment-simplebox-renderer, ytd-comment-action-buttons-renderer, #engagement-panel'
+			'ytd-comments-panel, ytd-engagement-panel, ytd-engagement-panel-section, ytd-engagement-panel-section-list-renderer[target-id*="comment"], ytd-comment-renderer, ytd-comment-thread-renderer, ytd-comment-simplebox-renderer, ytd-comment-action-buttons-renderer, [target-id="engagement-panel-comments-section"], #engagement-panel'
 		);
 	}
 
 	function isInReelActionUi(el) {
 		if (!el) return false;
+		if (speedRootEl && (el === speedRootEl || (el instanceof Node && speedRootEl.contains(el)))) {
+			return true;
+		}
 		if (isInsideCommentsPanel(el)) return false;
 		return !!closestAcrossShadow(
 			el,
@@ -464,18 +451,28 @@
 	function invalidateScopeCache() {
 		scopeCache = null;
 		scopeCacheAt = 0;
+		scopeCacheShortId = '';
 	}
 
 	function getShortsReelUiScopeRoot() {
 		const now = Date.now();
-		if (scopeCache && scopeCache.isConnected && now - scopeCacheAt < 500) {
+		const currentShortId = getCurrentShortId();
+		if (
+			scopeCache &&
+			scopeCache.isConnected &&
+			scopeCacheShortId === currentShortId &&
+			now - scopeCacheAt < 500
+		) {
 			return scopeCache;
 		}
+		if (scopeCacheShortId !== currentShortId) invalidateScopeCache();
 
 		// New Shorts markup places the action bar beside the player rather than
 		// inside ytd-reel-player-overlay-renderer or #shorts-player.
 		let bestActionBar = null;
 		let bestActionBarScore = -1;
+		let bestUrlMatchedActionBar = null;
+		let bestUrlMatchedActionBarScore = -1;
 		for (const actionBar of querySelectorAllDeep('reel-action-bar-view-model')) {
 			if (!(actionBar instanceof HTMLElement) || isInsideCommentsPanel(actionBar)) continue;
 			const r = actionBar.getBoundingClientRect();
@@ -489,10 +486,27 @@
 				bestActionBar = actionBar;
 				bestActionBarScore = score;
 			}
+			const renderer = closestAcrossShadow(actionBar, 'ytd-reel-video-renderer');
+			if (
+				currentShortId &&
+				renderer instanceof HTMLElement &&
+				shortIdFromHost(renderer) === currentShortId &&
+				score > bestUrlMatchedActionBarScore
+			) {
+				bestUrlMatchedActionBar = actionBar;
+				bestUrlMatchedActionBarScore = score;
+			}
+		}
+		if (bestUrlMatchedActionBar) {
+			scopeCache = bestUrlMatchedActionBar;
+			scopeCacheAt = now;
+			scopeCacheShortId = currentShortId;
+			return bestUrlMatchedActionBar;
 		}
 		if (bestActionBar) {
 			scopeCache = bestActionBar;
 			scopeCacheAt = now;
+			scopeCacheShortId = currentShortId;
 			return bestActionBar;
 		}
 
@@ -509,6 +523,7 @@
 			) {
 				scopeCache = o;
 				scopeCacheAt = now;
+				scopeCacheShortId = currentShortId;
 				return o;
 			}
 		}
@@ -519,6 +534,7 @@
 		if (overlay instanceof HTMLElement && !isInsideCommentsPanel(overlay)) {
 			scopeCache = overlay;
 			scopeCacheAt = now;
+			scopeCacheShortId = currentShortId;
 			return overlay;
 		}
 
@@ -526,6 +542,7 @@
 		if (sp instanceof HTMLElement && !isInsideCommentsPanel(sp)) {
 			scopeCache = sp;
 			scopeCacheAt = now;
+			scopeCacheShortId = currentShortId;
 			return sp;
 		}
 
@@ -836,31 +853,50 @@
 		const seen = new Set();
 		const candidates = [];
 		for (const sel of selectors) {
-			document.querySelectorAll(sel).forEach((v) => {
+			querySelectorAllDeep(sel).forEach((v) => {
 				if (v instanceof HTMLVideoElement && !seen.has(v)) {
 					seen.add(v);
 					candidates.push(v);
 				}
 			});
 		}
-		let best = null;
-		let bestScore = 0;
+		const urlId = getCurrentShortId();
 		const vw = window.innerWidth;
 		const vh = window.innerHeight;
+		let bestUrlMatch = null;
+		let bestUrlScore = -1;
+		let bestActive = null;
+		let bestActiveScore = -1;
+		let bestVisible = null;
+		let bestVisibleScore = -1;
 		for (const v of candidates) {
 			const r = v.getBoundingClientRect();
-			const iw = Math.min(r.right, vw) - Math.max(r.left, 0);
-			const ih = Math.min(r.bottom, vh) - Math.max(r.top, 0);
-			const area = Math.max(0, iw) * Math.max(0, ih);
+			const iw = Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
+			const ih = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
+			const area = iw * ih;
+			if (area <= 0) continue;
 			const centerX = (r.left + r.right) / 2;
-			const centerDist = Math.abs(centerX - vw / 2) / vw;
-			const score = area * (1 - centerDist * 0.35);
-			if (score > bestScore) {
-				bestScore = score;
-				best = v;
+			const centerY = (r.top + r.bottom) / 2;
+			const score = area * (1 - Math.abs(centerX - vw / 2) / vw * 0.35) *
+				(1 - Math.abs(centerY - vh / 2) / vh * 0.2);
+			if (score > bestVisibleScore) {
+				bestVisible = v;
+				bestVisibleScore = score;
+			}
+			const renderer = closestAcrossShadow(v, 'ytd-reel-video-renderer');
+			if (!(renderer instanceof HTMLElement)) continue;
+			if (urlId && shortIdFromHost(renderer) === urlId && score > bestUrlScore) {
+				bestUrlMatch = v;
+				bestUrlScore = score;
+			}
+			const active = renderer.hasAttribute('is-active') || renderer.hasAttribute('reel-active') ||
+				renderer.getAttribute('aria-hidden') === 'false';
+			if (active && score > bestActiveScore) {
+				bestActive = v;
+				bestActiveScore = score;
 			}
 		}
-		return best;
+		return bestUrlMatch || bestActive || bestVisible;
 	}
 
 	function getCurrentShortId() {
@@ -873,27 +909,38 @@
 		const renderer =
 			host.tagName === 'YTD-REEL-VIDEO-RENDERER'
 				? host
-				: host.querySelector('ytd-reel-video-renderer');
+				: closestAcrossShadow(host, 'ytd-reel-video-renderer') ||
+					querySelectorDeep('ytd-reel-video-renderer', host);
 		if (renderer instanceof HTMLElement) {
 			for (const id of [
+				renderer.getAttribute('id'),
 				renderer.getAttribute('reel-video-id'),
 				renderer.getAttribute('video-id'),
 				renderer.dataset.videoId,
 			]) {
 				if (id && id !== 'short' && id !== 'reel-video-renderer') return id;
 			}
-			for (const link of renderer.querySelectorAll('a[href*="/shorts/"]')) {
+			for (const link of querySelectorAllDeep('a[href*="/shorts/"]', renderer)) {
+				if (!(link instanceof HTMLAnchorElement)) continue;
+				if (link.closest('yt-reel-carousel-view-model, .ytReelCarouselViewModelHost')) continue;
+				if (/\/hashtag\//i.test(link.getAttribute('href') || '')) continue;
 				const match = `${link.getAttribute('href') || ''} ${link.href || ''}`.match(
 					/\/shorts\/([^/?#]+)/
 				);
 				if (match && match[1]) return match[1];
 			}
+			for (const el of querySelectorAllDeep(
+				'[src*="/vi/"], [srcset*="/vi/"], [style*="/vi/"]',
+				renderer
+			)) {
+				const blob = `${el.getAttribute('src') || ''} ${el.getAttribute('srcset') || ''} ${
+					el.getAttribute('style') || ''
+				}`;
+				const match = blob.match(/\/vi\/([^/]+)\//);
+				if (match && match[1]) return match[1];
+			}
 		}
-		const blob = `${host.getAttribute('style') || ''} ${
-			host.querySelector('[style*="/vi/"], [src*="/vi/"]')?.getAttribute('style') || ''
-		} ${host.querySelector('[src*="/vi/"]')?.getAttribute('src') || ''}`;
-		const thumbnailId = blob.match(/\/vi\/([^/]+)\//);
-		return thumbnailId && thumbnailId[1] ? thumbnailId[1] : '';
+		return '';
 	}
 
 	function applyPlaybackRateTo(video) {
@@ -905,20 +952,9 @@
 		} catch (_) {}
 	}
 
-	function applyToAllLikelyVideos() {
+	function applyToActiveShortsVideo() {
 		if (isToolboxControllerActive()) return;
-		const primary = getActiveShortsVideo();
-		applyPlaybackRateTo(primary);
-		const rate = getEffectivePlaybackRate();
-		document.querySelectorAll('ytd-reel-video-renderer video').forEach((v) => {
-			if (v === primary) return;
-			try {
-				if (!v.paused) {
-					v.playbackRate = rate;
-					v.defaultPlaybackRate = rate;
-				}
-			} catch (_) {}
-		});
+		applyPlaybackRateTo(getActiveShortsVideo());
 	}
 
 	function scheduleReapply() {
@@ -926,7 +962,7 @@
 		reapplyTimer = setTimeout(() => {
 			reapplyTimer = null;
 			if (isToolboxControllerActive()) return;
-			applyToAllLikelyVideos();
+			applyToActiveShortsVideo();
 		}, 50);
 	}
 
@@ -935,7 +971,7 @@
 		persistSpeedIndex();
 		persistDefaultSpeedIndex();
 		if (btnLabel) btnLabel.textContent = formatSpeedLabel(getSpeed());
-		applyToAllLikelyVideos();
+		applyToActiveShortsVideo();
 	}
 
 	let btnLabel = null;
@@ -1019,7 +1055,7 @@
 		speedRootEl = root;
 		syncSpeedUiWithNativeLike();
 		syncSpeedLayoutWithNative();
-		applyToAllLikelyVideos();
+		applyToActiveShortsVideo();
 		return true;
 	}
 
@@ -1055,7 +1091,7 @@
 		v.dataset[VIDEO_HOOK_KEY] = '1';
 		const handlers = {
 			ratechange: () => {
-				if (isToolboxControllerActive()) return;
+				if (isToolboxControllerActive() || getActiveShortsVideo() !== v) return;
 				const want = getEffectivePlaybackRate();
 				if (Math.abs(v.playbackRate - want) > 0.01) {
 					applyPlaybackRateTo(v);
@@ -1067,6 +1103,21 @@
 		v.addEventListener('ratechange', handlers.ratechange);
 		v.addEventListener('loadedmetadata', handlers.scheduleReapply);
 		v.addEventListener('playing', handlers.scheduleReapply);
+	}
+
+	function unhookVideoElement(v) {
+		const handlers = hookedVideos.get(v);
+		if (!handlers) return;
+		v.removeEventListener('ratechange', handlers.ratechange);
+		v.removeEventListener('loadedmetadata', handlers.scheduleReapply);
+		v.removeEventListener('playing', handlers.scheduleReapply);
+		hookedVideos.delete(v);
+		delete v.dataset[VIDEO_HOOK_KEY];
+	}
+
+	function unhookAllVideosUnder(node) {
+		if (node instanceof HTMLVideoElement) unhookVideoElement(node);
+		if (node instanceof Element) node.querySelectorAll('video').forEach(unhookVideoElement);
 	}
 
 	function hookAllVideosUnder(root) {
@@ -1082,6 +1133,7 @@
 		hookAllVideosUnder(shortsRoot);
 		videoObserver = new MutationObserver((muts) => {
 			for (const m of muts) {
+				m.removedNodes.forEach(unhookAllVideosUnder);
 				m.addedNodes.forEach((n) => {
 					if (n instanceof HTMLVideoElement) hookVideoElement(n);
 					else if (n instanceof Element) hookAllVideosUnder(n);
@@ -1157,13 +1209,13 @@
 			if (!holdActive) return;
 			holdActive = false;
 			holdPointerId = null;
-			applyToAllLikelyVideos();
+			applyToActiveShortsVideo();
 		}
 
 		function activateHoldPlayback(pid) {
 			holdActive = true;
 			holdPointerId = pid;
-			applyToAllLikelyVideos();
+			applyToActiveShortsVideo();
 		}
 
 		function cancelPendingHold() {
