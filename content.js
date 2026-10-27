@@ -12,6 +12,8 @@
 	const STORAGE_KEY_DEFAULT_SPEED_INDEX = 'bmYts3xOptsDefaultSpeedIndex';
 	const STORAGE_KEY_HOLD_SPEED_INDEX = 'bmYts3xOptsHoldSpeedIndex';
 	let mainTickInterval = null;
+	const hookedVideos = new Map();
+	let resizeLayoutTimer = null;
 
 	function isLiveToolboxUi() {
 		if (document.querySelector(`#${ROOT_ID} .yts-toolbox-panel`)) return true;
@@ -130,24 +132,6 @@
 	let scopeCache = null;
 	let scopeCacheAt = 0;
 	let speedRootEl = null;
-	// Keep the rendered Short in place while YouTube recalculates reel heights on
-	// a window resize. This deliberately uses the current DOM geometry instead of
-	// an item index, which can become stale and produce a black video surface.
-	let resizeVideoLockActive = false;
-	let resizePinnedShortId = '';
-	let resizePinnedHost = null;
-	let resizeAlignFrame = 0;
-	let resizeSettleTimer = null;
-	let resizeRetryTimer = null;
-	let shortsResizeObserver = null;
-	let observedShortsBoxes = [];
-	let resizeCorrectionAttempts = 0;
-	let miniPlayerResizeQuietUntil = 0;
-	let explicitShortNavUntil = 0;
-	let pendingShortsSwipe = null;
-	const RESIZE_SETTLE_MS = 1600;
-	const MINI_PLAYER_RESIZE_QUIET_MS = 5000;
-	const EXPLICIT_SHORT_NAV_MS = 2200;
 
 	const SHADOW_STYLES = `
 #${ROOT_ID}{--bm-btn-size:48px;--bm-btn-bg:rgba(255,255,255,.1);--bm-btn-fg:#fff;--bm-btn-backdrop:blur(8px);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;width:var(--bm-btn-size);margin-bottom:0;flex-shrink:0;pointer-events:auto;position:relative;z-index:4}
@@ -291,8 +275,10 @@
 				'segmented-like-dislike-button-view-model button.yt-spec-button-shape-next--segmented-start',
 				scope
 			) ||
+			querySelectorDeep('like-button-view-model button.ytSpecButtonShapeNextHost', scope) ||
 			querySelectorDeep('#like-button button.yt-spec-button-shape-next', scope) ||
-			querySelectorDeep('like-button-view-model button.yt-spec-button-shape-next', scope);
+			querySelectorDeep('like-button-view-model button.yt-spec-button-shape-next', scope) ||
+			querySelectorDeep('like-button-view-model button', scope);
 		if (!ref || !isInReelActionUi(ref)) return null;
 		return ref;
 	}
@@ -397,6 +383,56 @@
 		return null;
 	}
 
+	function querySelectorAllDeep(selector, base = document.documentElement) {
+		if (!base) return [];
+		const out = [];
+		const seen = new Set();
+		const stack = [base];
+		while (stack.length) {
+			const node = stack.pop();
+			if (!node) continue;
+			if (node instanceof Element || node instanceof ShadowRoot) {
+				try {
+				node.querySelectorAll(selector).forEach((el) => {
+					if (!seen.has(el)) {
+						seen.add(el);
+						out.push(el);
+					}
+				});
+			} catch (_) {}
+			}
+			if (node instanceof Element) {
+				if (node.shadowRoot) stack.push(node.shadowRoot);
+				for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
+			} else if (node instanceof ShadowRoot) {
+				for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
+			}
+		}
+		return out;
+	}
+
+	function closestAcrossShadow(startEl, selector) {
+		let node = startEl;
+		while (node) {
+			if (node instanceof Element) {
+				try {
+					if (node.matches(selector)) return node;
+				} catch (_) {}
+			}
+			if (node instanceof Element && node.parentElement) {
+				node = node.parentElement;
+				continue;
+			}
+			const root = node.getRootNode?.();
+			if (root instanceof ShadowRoot && root.host) {
+				node = root.host;
+				continue;
+			}
+			break;
+		}
+		return null;
+	}
+
 	function isInsideCommentsPanel(el) {
 		if (!el) return false;
 		return !!el.closest(
@@ -407,10 +443,9 @@
 	function isInReelActionUi(el) {
 		if (!el) return false;
 		if (isInsideCommentsPanel(el)) return false;
-		return !!(
-			el.closest('ytd-reel-player-overlay-renderer') ||
-			el.closest('reel-action-bar-view-model') ||
-			el.closest('#shorts-player')
+		return !!closestAcrossShadow(
+			el,
+			'ytd-reel-player-overlay-renderer, ytd-reel-player-overlay-renderer-cow, yt-reel-player-overlay-view-model, reel-action-bar-view-model, #shorts-player'
 		);
 	}
 
@@ -437,7 +472,33 @@
 			return scopeCache;
 		}
 
-		for (const o of document.querySelectorAll('ytd-reel-player-overlay-renderer')) {
+		// New Shorts markup places the action bar beside the player rather than
+		// inside ytd-reel-player-overlay-renderer or #shorts-player.
+		let bestActionBar = null;
+		let bestActionBarScore = -1;
+		for (const actionBar of querySelectorAllDeep('reel-action-bar-view-model')) {
+			if (!(actionBar instanceof HTMLElement) || isInsideCommentsPanel(actionBar)) continue;
+			const r = actionBar.getBoundingClientRect();
+			if (r.width < 24 || r.height < 24 || r.right <= 0 || r.left >= window.innerWidth) continue;
+			if (r.bottom <= 0 || r.top >= window.innerHeight) continue;
+			const visibleArea =
+				Math.max(0, Math.min(r.right, window.innerWidth) - Math.max(r.left, 0)) *
+				Math.max(0, Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0));
+			const score = visibleArea * (1.2 - Math.abs((r.top + r.bottom) / 2 - window.innerHeight / 2) / window.innerHeight);
+			if (score > bestActionBarScore) {
+				bestActionBar = actionBar;
+				bestActionBarScore = score;
+			}
+		}
+		if (bestActionBar) {
+			scopeCache = bestActionBar;
+			scopeCacheAt = now;
+			return bestActionBar;
+		}
+
+		for (const o of querySelectorAllDeep(
+			'ytd-reel-player-overlay-renderer, ytd-reel-player-overlay-renderer-cow, yt-reel-player-overlay-view-model'
+		)) {
 			if (!(o instanceof HTMLElement) || isInsideCommentsPanel(o)) continue;
 			const r = o.getBoundingClientRect();
 			if (r.width < 8 || r.height < 8 || r.bottom <= 0 || r.top >= window.innerHeight) continue;
@@ -452,14 +513,16 @@
 			}
 		}
 
-		const overlay = document.querySelector('ytd-reel-player-overlay-renderer');
+		const overlay = querySelectorDeep(
+			'ytd-reel-player-overlay-renderer, ytd-reel-player-overlay-renderer-cow, yt-reel-player-overlay-view-model'
+		);
 		if (overlay instanceof HTMLElement && !isInsideCommentsPanel(overlay)) {
 			scopeCache = overlay;
 			scopeCacheAt = now;
 			return overlay;
 		}
 
-		const sp = document.querySelector('#shorts-player');
+		const sp = querySelectorDeep('#shorts-player');
 		if (sp instanceof HTMLElement && !isInsideCommentsPanel(sp)) {
 			scopeCache = sp;
 			scopeCacheAt = now;
@@ -489,26 +552,35 @@
 	function findLikeRowElement(likeInner) {
 		if (!likeInner) return null;
 		const byItem =
-			likeInner.closest('reel-action-bar-item-view-model') ||
-			likeInner.closest('reel-action-bar-item-renderer');
+			closestAcrossShadow(likeInner, 'reel-action-bar-item-view-model') ||
+			closestAcrossShadow(likeInner, 'reel-action-bar-item-renderer');
 		if (byItem && byItem.parentElement) return byItem;
 
 		const bar =
-			likeInner.closest('reel-action-bar-view-model') || likeInner.closest('#actions');
+			closestAcrossShadow(likeInner, 'reel-action-bar-view-model') ||
+			closestAcrossShadow(likeInner, '#actions');
 		if (bar) {
-			const tagged = likeInner.closest(
+			const tagged = closestAcrossShadow(
+				likeInner,
 				'like-button-view-model, segmented-like-dislike-button-view-model, button-view-model'
 			);
 			if (tagged instanceof HTMLElement) {
 				let row = tagged;
-				while (row.parentElement && row.parentElement !== bar) {
-					row = row.parentElement;
+				for (let depth = 0; depth < 32 && row !== bar; depth++) {
+					if (row.parentElement === bar) return row;
+					if (row.parentElement) {
+						row = row.parentElement;
+						continue;
+					}
+					const root = row.getRootNode();
+					if (!(root instanceof ShadowRoot)) break;
+					if (root.host === bar) return row;
+					row = root.host;
 				}
-				if (row.parentElement === bar) return row;
 			}
 		}
 
-		const actionsBoundary = bar || likeInner.closest('#actions');
+		const actionsBoundary = bar || closestAcrossShadow(likeInner, '#actions');
 		let n = likeInner;
 		for (let depth = 0; depth < 28 && n; depth++) {
 			const p = n.parentElement;
@@ -572,7 +644,7 @@
 	function findVisibleNativeLikeButton() {
 		const scoped = findNativeLikeButtonForStyle();
 		if (isVisibleNativeRailButton(scoped)) return scoped;
-		const nodes = document.querySelectorAll(
+		const nodes = querySelectorAllDeep(
 			'like-button-view-model button, #like-button button, segmented-like-button-view-model button, reel-action-bar-view-model button'
 		);
 		let best = null;
@@ -692,15 +764,23 @@
 	function attachRootAtLikeRow(root, likeRow) {
 		if (!(root instanceof HTMLElement) || !(likeRow instanceof HTMLElement)) return false;
 		if (likeRow.contains(root) || root.contains(likeRow)) return false;
-		const actionBar = likeRow.closest('reel-action-bar-view-model, #actions');
-		const parent = actionBar instanceof HTMLElement ? actionBar : likeRow.parentElement;
-		if (!(parent instanceof HTMLElement)) return false;
+		const actionBar = closestAcrossShadow(likeRow, 'reel-action-bar-view-model, #actions');
+		const rowRoot = likeRow.getRootNode();
+		const parent =
+			rowRoot instanceof ShadowRoot && actionBar instanceof HTMLElement && rowRoot.host === actionBar
+				? rowRoot
+				: actionBar instanceof HTMLElement
+					? actionBar
+					: likeRow.parentElement;
+		if (!(parent instanceof Node)) return false;
 		beginDomMutation();
 		try {
 			// Put the speed control in the native action rail's first visual slot,
 			// ahead of optional account-specific actions such as Gemini.
-			const reverse = getComputedStyle(parent).flexDirection === 'column-reverse';
+			const reverse =
+				parent instanceof Element && getComputedStyle(parent).flexDirection === 'column-reverse';
 			parent.insertBefore(root, reverse ? null : parent.firstElementChild);
+			ensureStylesInShadowRoot(root.getRootNode());
 			delete root.dataset.ytsFixedHost;
 			root.dataset.bmYtsRole = SPEED_ROLE;
 			root.style.setProperty('position', 'relative', 'important');
@@ -816,240 +896,6 @@
 		return thumbnailId && thumbnailId[1] ? thumbnailId[1] : '';
 	}
 
-	function getShortsSequenceItems() {
-		const inner = document.querySelector('#shorts-inner-container');
-		const root = inner instanceof HTMLElement ? inner : document.querySelector('ytd-shorts');
-		if (!(root instanceof HTMLElement)) return [];
-		const direct = Array.from(
-			root.querySelectorAll(
-				':scope > .reel-video-in-sequence-new, :scope > .reel-video-in-sequence'
-			)
-		);
-		return direct.length
-			? direct
-			: Array.from(
-				document.querySelectorAll('.reel-video-in-sequence-new, .reel-video-in-sequence')
-			);
-	}
-
-	function captureVisibleShortPin(force = false) {
-		if (resizeVideoLockActive && !force) return;
-		const currentId = getCurrentShortId();
-		const video = getActiveShortsVideo();
-		const renderer = video?.closest('ytd-reel-video-renderer');
-		const fromVideo = renderer?.closest(
-			'.reel-video-in-sequence-new, .reel-video-in-sequence'
-		);
-		const items = getShortsSequenceItems();
-		const host =
-			fromVideo instanceof HTMLElement
-				? fromVideo
-				: items.find((item) => shortIdFromHost(item) === currentId) || null;
-		const id = (host && shortIdFromHost(host)) || currentId;
-		if (!id || id === 'short') return;
-		resizePinnedShortId = id;
-		if (host instanceof HTMLElement) resizePinnedHost = host;
-	}
-
-	function isExplicitShortNavigation() {
-		return Date.now() < explicitShortNavUntil;
-	}
-
-	function noteExplicitShortNavigation() {
-		explicitShortNavUntil = Date.now() + EXPLICIT_SHORT_NAV_MS;
-		cancelResizeVideoLockForUserNavigation();
-	}
-
-	function findPinnedShortHost() {
-		if (resizePinnedHost instanceof HTMLElement && resizePinnedHost.isConnected) {
-			if (!resizePinnedShortId || shortIdFromHost(resizePinnedHost) === resizePinnedShortId) {
-				return resizePinnedHost;
-			}
-		}
-		const found = getShortsSequenceItems().find(
-			(item) => shortIdFromHost(item) === resizePinnedShortId
-		);
-		if (found instanceof HTMLElement) resizePinnedHost = found;
-		return found instanceof HTMLElement ? found : null;
-	}
-
-	function alignPinnedShortToViewport() {
-		// The toolbox build already owns resize pinning on this page. Running a
-		// second independent scroll lock here can make the two builds fight and
-		// snap the feed to another Short while the viewport is changing.
-		if (isToolboxControllerActive()) {
-			cancelResizeVideoLockForUserNavigation();
-			return;
-		}
-		if (isMiniPlayerResizeTransition()) {
-			cancelResizeVideoLockForUserNavigation();
-			return;
-		}
-		const currentId = getCurrentShortId();
-		if (currentId && resizePinnedShortId && currentId !== resizePinnedShortId) {
-			// A user gesture is allowed to change the pin. Without one, this is the
-			// resize-induced Shorts route jump we are protecting against, so retain
-			// the original host and scroll it back into the viewport.
-			if (isExplicitShortNavigation()) {
-				captureVisibleShortPin(true);
-				return;
-			}
-		}
-		const host = findPinnedShortHost();
-		if (!(host instanceof HTMLElement)) return;
-		const seen = new Set();
-		for (const selector of ['#shorts-container', '#shorts-inner-container']) {
-			const scroller = document.querySelector(selector);
-			if (!(scroller instanceof HTMLElement) || seen.has(scroller)) continue;
-			seen.add(scroller);
-			const scrollerRect = scroller.getBoundingClientRect();
-			const hostRect = host.getBoundingClientRect();
-			const delta = hostRect.top - scrollerRect.top;
-			if (
-				scrollerRect.height < 8 ||
-				!Number.isFinite(delta) ||
-				Math.abs(delta) < 1 ||
-				Math.abs(delta) > scrollerRect.height * 2
-			) {
-				continue;
-			}
-			const nextTop = Math.max(0, scroller.scrollTop + delta);
-			try {
-				scroller.scrollTo({ top: nextTop, behavior: 'instant' });
-			} catch (_) {
-				scroller.scrollTop = nextTop;
-			}
-		}
-	}
-
-	function observeShortsResize() {
-		if (!('ResizeObserver' in window)) return;
-		const boxes = ['#shorts-container', '#shorts-inner-container']
-			.map((selector) => document.querySelector(selector))
-			.filter((el) => el instanceof HTMLElement);
-		if (
-			shortsResizeObserver &&
-			boxes.length === observedShortsBoxes.length &&
-			boxes.every((box, index) => box === observedShortsBoxes[index])
-		) return;
-		if (shortsResizeObserver) shortsResizeObserver.disconnect();
-		observedShortsBoxes = boxes;
-		shortsResizeObserver = new ResizeObserver(() => {
-			if (resizeVideoLockActive) scheduleResizeVideoAlignment();
-		});
-		boxes.forEach((box) => shortsResizeObserver.observe(box));
-	}
-
-	function scheduleResizeVideoAlignment() {
-		if (!resizeAlignFrame) {
-			resizeAlignFrame = requestAnimationFrame(() => {
-				resizeAlignFrame = 0;
-				alignPinnedShortToViewport();
-			});
-		}
-		if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
-		resizeSettleTimer = setTimeout(() => {
-			resizeSettleTimer = null;
-			requestAnimationFrame(() => {
-				if (isMiniPlayerResizeTransition()) {
-					cancelResizeVideoLockForUserNavigation();
-					return;
-				}
-				alignPinnedShortToViewport();
-				if (resizeCorrectionAttempts++ < 2) {
-					if (resizeRetryTimer) clearTimeout(resizeRetryTimer);
-					resizeRetryTimer = setTimeout(scheduleResizeVideoAlignment, 180);
-					return;
-				}
-				resizeVideoLockActive = false;
-				captureVisibleShortPin(true);
-			});
-		}, RESIZE_SETTLE_MS);
-	}
-
-	function beginResizeVideoLock() {
-		if (!location.pathname.startsWith('/shorts/')) return;
-		if (isToolboxControllerActive()) {
-			cancelResizeVideoLockForUserNavigation();
-			return;
-		}
-		if (isMiniPlayerResizeTransition()) {
-			cancelResizeVideoLockForUserNavigation();
-			captureVisibleShortPin(true);
-			return;
-		}
-		if (resizeRetryTimer) {
-			clearTimeout(resizeRetryTimer);
-			resizeRetryTimer = null;
-		}
-		if (!resizeVideoLockActive) {
-			captureVisibleShortPin();
-			resizeVideoLockActive = !!resizePinnedShortId;
-			resizeCorrectionAttempts = 0;
-			observeShortsResize();
-		}
-		if (resizeVideoLockActive) scheduleResizeVideoAlignment();
-	}
-
-	function isMiniPlayerResizeTransition() {
-		if (document.body?.matches('body[class*="efyt-mini-player"]')) {
-			// EFYT can briefly drop its size class while changing window presets.
-			// Keep the resize pin released across that class hand-off.
-			miniPlayerResizeQuietUntil = Date.now() + MINI_PLAYER_RESIZE_QUIET_MS;
-			return true;
-		}
-		return Date.now() < miniPlayerResizeQuietUntil;
-	}
-
-	function cancelResizeVideoLockForUserNavigation() {
-		if (!resizeVideoLockActive && !resizeSettleTimer) return;
-		resizeVideoLockActive = false;
-		if (resizeAlignFrame) cancelAnimationFrame(resizeAlignFrame);
-		resizeAlignFrame = 0;
-		if (resizeSettleTimer) clearTimeout(resizeSettleTimer);
-		resizeSettleTimer = null;
-		if (resizeRetryTimer) clearTimeout(resizeRetryTimer);
-		resizeRetryTimer = null;
-		resizeCorrectionAttempts = 0;
-	}
-
-	function onManualShortNavigationIntent(e) {
-		if (e.type === 'wheel' && Math.abs(e.deltaY) > 2) {
-			noteExplicitShortNavigation();
-			return;
-		}
-		if (e.type === 'keydown' && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'].includes(e.key)) {
-			noteExplicitShortNavigation();
-			return;
-		}
-		if (e.type === 'pointerdown' && e.target instanceof Element) {
-			if (
-				e.target.closest(
-					'#navigation-button-up, #navigation-button-down, .navigation-container, [data-navigation-direction], [aria-label*="Next"], [aria-label*="Previous"], [aria-label*="上一"], [aria-label*="下一"], [aria-label*="前の動画"], [aria-label*="次の動画"]'
-				)
-			) {
-				noteExplicitShortNavigation();
-				return;
-			}
-			if (e.isPrimary !== false && e.target.closest('#shorts-container, #shorts-player, ytd-reel-video-renderer')) {
-				pendingShortsSwipe = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
-			}
-		}
-		if (e.type === 'pointerup' || e.type === 'pointercancel') {
-			const start = pendingShortsSwipe;
-			pendingShortsSwipe = null;
-			if (
-				e.type === 'pointerup' &&
-				start &&
-				start.pointerId === e.pointerId &&
-				Math.abs(e.clientY - start.y) >= 28 &&
-				Math.abs(e.clientY - start.y) > Math.abs(e.clientX - start.x)
-			) {
-				noteExplicitShortNavigation();
-			}
-		}
-	}
-
 	function applyPlaybackRateTo(video) {
 		if (!video) return;
 		const rate = getEffectivePlaybackRate();
@@ -1060,6 +906,7 @@
 	}
 
 	function applyToAllLikelyVideos() {
+		if (isToolboxControllerActive()) return;
 		const primary = getActiveShortsVideo();
 		applyPlaybackRateTo(primary);
 		const rate = getEffectivePlaybackRate();
@@ -1078,6 +925,7 @@
 		if (reapplyTimer) clearTimeout(reapplyTimer);
 		reapplyTimer = setTimeout(() => {
 			reapplyTimer = null;
+			if (isToolboxControllerActive()) return;
 			applyToAllLikelyVideos();
 		}, 50);
 	}
@@ -1096,7 +944,7 @@
 		if (!(scope instanceof HTMLElement)) return null;
 		const actions = scope.querySelector('#actions');
 		if (!(actions instanceof HTMLElement)) return null;
-		for (const btn of actions.querySelectorAll('button')) {
+		for (const btn of querySelectorAllDeep('button', actions)) {
 			if (!(btn instanceof HTMLButtonElement)) continue;
 			const label = (
 				btn.getAttribute('aria-label') ||
@@ -1180,6 +1028,13 @@
 			videoObserver.disconnect();
 			videoObserver = null;
 		}
+		for (const [video, handlers] of hookedVideos) {
+			video.removeEventListener('ratechange', handlers.ratechange);
+			video.removeEventListener('loadedmetadata', handlers.scheduleReapply);
+			video.removeEventListener('playing', handlers.scheduleReapply);
+			delete video.dataset[VIDEO_HOOK_KEY];
+		}
+		hookedVideos.clear();
 	}
 
 	function stopSelfForToolboxTakeover() {
@@ -1189,12 +1044,6 @@
 			mountDebounceTimer = null;
 		}
 		teardownVideoHooks();
-		cancelResizeVideoLockForUserNavigation();
-		if (shortsResizeObserver) {
-			shortsResizeObserver.disconnect();
-			shortsResizeObserver = null;
-			observedShortsBoxes = [];
-		}
 		if (speedRootEl && speedRootEl.isConnected) {
 			speedRootEl.remove();
 		}
@@ -1204,14 +1053,20 @@
 	function hookVideoElement(v) {
 		if (!(v instanceof HTMLVideoElement) || v.dataset[VIDEO_HOOK_KEY]) return;
 		v.dataset[VIDEO_HOOK_KEY] = '1';
-		v.addEventListener('ratechange', () => {
-			const want = getEffectivePlaybackRate();
-			if (Math.abs(v.playbackRate - want) > 0.01) {
-				applyPlaybackRateTo(v);
-			}
-		});
-		v.addEventListener('loadedmetadata', scheduleReapply);
-		v.addEventListener('playing', scheduleReapply);
+		const handlers = {
+			ratechange: () => {
+				if (isToolboxControllerActive()) return;
+				const want = getEffectivePlaybackRate();
+				if (Math.abs(v.playbackRate - want) > 0.01) {
+					applyPlaybackRateTo(v);
+				}
+			},
+			scheduleReapply,
+		};
+		hookedVideos.set(v, handlers);
+		v.addEventListener('ratechange', handlers.ratechange);
+		v.addEventListener('loadedmetadata', handlers.scheduleReapply);
+		v.addEventListener('playing', handlers.scheduleReapply);
 	}
 
 	function hookAllVideosUnder(root) {
@@ -1412,15 +1267,6 @@
 
 	function onShortsNavigation() {
 		invalidateScopeCache();
-		const currentId = getCurrentShortId();
-		if (resizeVideoLockActive && currentId && currentId !== resizePinnedShortId) {
-			if (isExplicitShortNavigation()) {
-				cancelResizeVideoLockForUserNavigation();
-				captureVisibleShortPin(true);
-			} else {
-				scheduleResizeVideoAlignment();
-			}
-		}
 		if (isToolboxControllerActive()) {
 			stopSelfForToolboxTakeover();
 			return;
@@ -1428,9 +1274,6 @@
 		if (isSpeedOnBodyHost()) {
 			syncSpeedLayoutWithNative();
 			syncSpeedUiWithNativeLike();
-			if (!resizeVideoLockActive) {
-				requestAnimationFrame(captureVisibleShortPin);
-			}
 			return;
 		}
 		if (speedRootEl && speedRootEl.isConnected) {
@@ -1444,7 +1287,6 @@
 		speedRootEl = null;
 		initMountObserver();
 		scheduleMountPass();
-		if (!resizeVideoLockActive) requestAnimationFrame(captureVisibleShortPin);
 	}
 
 	function tick() {
@@ -1460,23 +1302,20 @@
 		ensureSpeedAnchorIntact();
 		syncSpeedLayoutWithNative();
 		syncSpeedUiWithNativeLike();
-		captureVisibleShortPin();
 	}
 
-	function onDocumentScrollForSpeed() {
+	function onDocumentScrollForSpeed(e) {
 		if (isToolboxControllerActive()) return;
 		if (isSpeedOnBodyHost()) syncSpeedLayoutWithNative();
-		captureVisibleShortPin();
 	}
 
 	function onWindowResize() {
-		beginResizeVideoLock();
-		onDocumentScrollForSpeed();
-	}
-
-	function onBrowserHistoryShortNavigation() {
-		if (!location.pathname.startsWith('/shorts/')) return;
-		noteExplicitShortNavigation();
+		if (isToolboxControllerActive()) return;
+		if (resizeLayoutTimer) clearTimeout(resizeLayoutTimer);
+		resizeLayoutTimer = setTimeout(() => {
+			resizeLayoutTimer = null;
+			if (!isToolboxControllerActive() && isSpeedOnBodyHost()) syncSpeedLayoutWithNative();
+		}, 120);
 	}
 
 	clearStaleToolboxControllerAttr();
@@ -1502,12 +1341,6 @@
 		});
 	}
 	document.addEventListener('scroll', onDocumentScrollForSpeed, { capture: true, passive: true });
-	document.addEventListener('wheel', onManualShortNavigationIntent, { capture: true, passive: true });
-	document.addEventListener('keydown', onManualShortNavigationIntent, true);
-	document.addEventListener('pointerdown', onManualShortNavigationIntent, true);
-	document.addEventListener('pointerup', onManualShortNavigationIntent, true);
-	document.addEventListener('pointercancel', onManualShortNavigationIntent, true);
-	window.addEventListener('popstate', onBrowserHistoryShortNavigation, true);
 	new MutationObserver(() => {
 		if (isToolboxControllerActive()) stopSelfForToolboxTakeover();
 		else if (!speedRootEl || !speedRootEl.isConnected) scheduleMountPass();
@@ -1519,5 +1352,4 @@
 	mainTickInterval = setInterval(tick, 2000);
 	initStorageBackedOptions();
 	installHoldListeners();
-	requestAnimationFrame(captureVisibleShortPin);
 })();
