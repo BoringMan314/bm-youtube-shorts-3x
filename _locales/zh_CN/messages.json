@@ -1,4 +1,8 @@
 {
+  "popupPlaybackGroup": {
+    "message": "播放速度",
+    "description": "Playback settings section heading."
+  },
   "popupAriaDefaultShortSpeedCycle": {
     "message": "循环默认 Shorts 倍速（1×、1.5×、2×、3×）",
     "description": "设置弹窗内默认倍速循环按钮的无障碍标签。"
@@ -36,3 +40,4 @@
     "description": "扩展功能名称（简体中文）"
   }
 }
+

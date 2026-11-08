@@ -1,4 +1,8 @@
 {
+  "popupPlaybackGroup": {
+    "message": "PLAYBACK SPEED",
+    "description": "Playback settings section heading."
+  },
   "popupAriaDefaultShortSpeedCycle": {
     "message": "Cycle default Shorts playback speed: 1×, 1.5×, 2×, 3×.",
     "description": "ARIA label for the default playback speed cycle button."
@@ -36,3 +40,4 @@
     "description": "Extension name (English)"
   }
 }
+

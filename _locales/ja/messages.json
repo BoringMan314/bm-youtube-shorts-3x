@@ -1,4 +1,8 @@
 {
+  "popupPlaybackGroup": {
+    "message": "再生速度",
+    "description": "Playback settings section heading."
+  },
   "popupAriaDefaultShortSpeedCycle": {
     "message": "ショートの既定再生速度を切り替えます（1×、1.5×、2×、3×）。",
     "description": "ポップアップの既定倍速ボタンの aria ラベル。"
@@ -36,3 +40,4 @@
     "description": "拡張機能名（日本語）"
   }
 }
+
