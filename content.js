@@ -8,9 +8,15 @@
 	const CONTROLLER_ATTR = 'data-bm-yts-controller';
 	const TOOLBOX_ROLE = 'toolbox';
 	const SPEED_ROLE = 'speed';
-	const SPEED_STORAGE_KEY = 'bmYts3xSpeed';
-	const STORAGE_KEY_DEFAULT_SPEED_INDEX = 'bmYts3xOptsDefaultSpeedIndex';
-	const STORAGE_KEY_HOLD_SPEED_INDEX = 'bmYts3xOptsHoldSpeedIndex';
+	const SPEED_STORAGE_KEY = 'bmYts3xSpeedV2';
+	const IS_INCOGNITO_CONTEXT = chrome.extension?.inIncognitoContext === true;
+	const profileStorageKey = (key) => (IS_INCOGNITO_CONTEXT ? `${key}_incognito` : key);
+	const PROFILE_SETTINGS_VERSION_KEY = 'bmYtsSettingsSchema';
+	const PROFILE_SETTINGS_VERSION = 1;
+	const BASE_STORAGE_KEY_DEFAULT_SPEED_INDEX = 'bmYts3xOptsDefaultSpeedIndex';
+	const BASE_STORAGE_KEY_HOLD_SPEED_INDEX = 'bmYts3xOptsHoldSpeedIndex';
+	const STORAGE_KEY_DEFAULT_SPEED_INDEX = profileStorageKey(BASE_STORAGE_KEY_DEFAULT_SPEED_INDEX);
+	const STORAGE_KEY_HOLD_SPEED_INDEX = profileStorageKey(BASE_STORAGE_KEY_HOLD_SPEED_INDEX);
 	let mainTickInterval = null;
 	const hookedVideos = new Map();
 	let resizeLayoutTimer = null;
@@ -63,6 +69,43 @@
 		return Math.max(0, Math.min(SPEEDS.length - 1, Math.floor(n)));
 	}
 
+	function loadProfileSettings(defaults, callback) {
+		const profileDefaults = Object.fromEntries(
+			Object.entries(defaults).map(([key, value]) => [profileStorageKey(key), value])
+		);
+		const allProfileDefaults = {};
+		for (const [key, value] of Object.entries(defaults)) {
+			allProfileDefaults[key] = value;
+			allProfileDefaults[`${key}_incognito`] = value;
+		}
+		const loadValues = () => {
+			chrome.storage.local.get(profileDefaults, (values) => {
+				callback(chrome.runtime.lastError ? profileDefaults : values);
+			});
+		};
+		try {
+			chrome.storage.local.get(PROFILE_SETTINGS_VERSION_KEY, (res) => {
+				if (chrome.runtime.lastError) {
+					loadValues();
+					return;
+				}
+				if (res[PROFILE_SETTINGS_VERSION_KEY] === PROFILE_SETTINGS_VERSION) {
+					loadValues();
+					return;
+				}
+				chrome.storage.local.set(
+					{
+						...allProfileDefaults,
+						[PROFILE_SETTINGS_VERSION_KEY]: PROFILE_SETTINGS_VERSION,
+					},
+					loadValues
+				);
+			});
+		} catch (_) {
+			callback(profileDefaults);
+		}
+	}
+
 	function persistSpeedIndex() {
 		try {
 			sessionStorage.setItem(SPEED_STORAGE_KEY, String(currentIndex));
@@ -83,13 +126,13 @@
 
 	function initStorageBackedOptions() {
 		try {
-			chrome.storage.local.get(
+			loadProfileSettings(
 				{
-					[STORAGE_KEY_DEFAULT_SPEED_INDEX]: 0,
-					[STORAGE_KEY_HOLD_SPEED_INDEX]: 2,
+					[BASE_STORAGE_KEY_DEFAULT_SPEED_INDEX]: 0,
+					[BASE_STORAGE_KEY_HOLD_SPEED_INDEX]: 2,
 				},
 				(res) => {
-					if (chrome.runtime.lastError) return;
+					if (!res) return;
 					holdSpeedIndex = clampSpeedIndex(res[STORAGE_KEY_HOLD_SPEED_INDEX]);
 					const sess = readSessionIndex();
 					if (sess !== null) {

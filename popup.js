@@ -1,8 +1,40 @@
 'use strict';
 
 const SPEEDS = [1, 1.5, 2, 3];
-const STORAGE_KEY_DEFAULT_SPEED_INDEX = 'bmYts3xOptsDefaultSpeedIndex';
-const STORAGE_KEY_HOLD_SPEED_INDEX = 'bmYts3xOptsHoldSpeedIndex';
+const BASE_STORAGE_KEY_DEFAULT_SPEED_INDEX = 'bmYts3xOptsDefaultSpeedIndex';
+const BASE_STORAGE_KEY_HOLD_SPEED_INDEX = 'bmYts3xOptsHoldSpeedIndex';
+const PROFILE_SETTINGS_VERSION_KEY = 'bmYtsSettingsSchema';
+const PROFILE_SETTINGS_VERSION = 1;
+
+function profileStorageKey(key, isIncognito) {
+	return isIncognito ? `${key}_incognito` : key;
+}
+
+async function loadProfileSettings(defaults, isIncognito) {
+	const keys = Object.fromEntries(
+		Object.keys(defaults).map((key) => [key, profileStorageKey(key, isIncognito)])
+	);
+	const profileDefaults = Object.fromEntries(
+		Object.entries(defaults).map(([key, value]) => [keys[key], value])
+	);
+	const allProfileDefaults = {};
+	for (const [key, value] of Object.entries(defaults)) {
+		allProfileDefaults[key] = value;
+		allProfileDefaults[profileStorageKey(key, true)] = value;
+	}
+	try {
+		const stored = await chrome.storage.local.get(PROFILE_SETTINGS_VERSION_KEY);
+		if (stored[PROFILE_SETTINGS_VERSION_KEY] !== PROFILE_SETTINGS_VERSION) {
+			await chrome.storage.local.set({
+				...allProfileDefaults,
+				[PROFILE_SETTINGS_VERSION_KEY]: PROFILE_SETTINGS_VERSION,
+			});
+		}
+		return { keys, values: await chrome.storage.local.get(profileDefaults) };
+	} catch (_) {
+		return { keys, values: profileDefaults };
+	}
+}
 
 function t(key) {
 	try {
@@ -35,7 +67,7 @@ function applyI18n() {
 	});
 }
 
-function init() {
+async function init() {
 	applyI18n();
 	const btnDef = document.getElementById('btnDefaultSpeed');
 	const btnHold = document.getElementById('btnHoldSpeed');
@@ -51,6 +83,13 @@ function init() {
 
 	let defaultIdx = 0;
 	let holdIdx = 2;
+	const { keys, values } = await loadProfileSettings(
+		{
+			[BASE_STORAGE_KEY_DEFAULT_SPEED_INDEX]: 0,
+			[BASE_STORAGE_KEY_HOLD_SPEED_INDEX]: 2,
+		},
+		chrome.extension?.inIncognitoContext === true
+	);
 
 	function syncLabels() {
 		lblDef.textContent = formatSpeedLabel(SPEEDS[defaultIdx]);
@@ -59,36 +98,28 @@ function init() {
 		btnHold.setAttribute('aria-label', t('popupAriaHoldSpeedCycle'));
 	}
 
-	chrome.storage.local.get(
-		{
-			[STORAGE_KEY_DEFAULT_SPEED_INDEX]: 0,
-			[STORAGE_KEY_HOLD_SPEED_INDEX]: 2,
-		},
-		(res) => {
-			if (chrome.runtime.lastError) return;
-			defaultIdx = clampIndex(res[STORAGE_KEY_DEFAULT_SPEED_INDEX]);
-			holdIdx = clampIndex(res[STORAGE_KEY_HOLD_SPEED_INDEX]);
-			syncLabels();
-		}
-	);
+	defaultIdx = clampIndex(values[keys[BASE_STORAGE_KEY_DEFAULT_SPEED_INDEX]]);
+	holdIdx = clampIndex(values[keys[BASE_STORAGE_KEY_HOLD_SPEED_INDEX]]);
+	syncLabels();
 
 	btnDef.addEventListener('click', () => {
 		defaultIdx = (defaultIdx + 1) % SPEEDS.length;
 		syncLabels();
 		chrome.storage.local.set({
-			[STORAGE_KEY_DEFAULT_SPEED_INDEX]: defaultIdx,
+			[keys[BASE_STORAGE_KEY_DEFAULT_SPEED_INDEX]]: defaultIdx,
 		});
 	});
 	chrome.storage.onChanged.addListener((changes, areaName) => {
-		if (areaName !== 'local' || !changes[STORAGE_KEY_DEFAULT_SPEED_INDEX]) return;
-		defaultIdx = clampIndex(changes[STORAGE_KEY_DEFAULT_SPEED_INDEX].newValue);
+		const key = keys[BASE_STORAGE_KEY_DEFAULT_SPEED_INDEX];
+		if (areaName !== 'local' || !changes[key]) return;
+		defaultIdx = clampIndex(changes[key].newValue);
 		syncLabels();
 	});
 	btnHold.addEventListener('click', () => {
 		holdIdx = (holdIdx + 1) % SPEEDS.length;
 		syncLabels();
 		chrome.storage.local.set({
-			[STORAGE_KEY_HOLD_SPEED_INDEX]: holdIdx,
+			[keys[BASE_STORAGE_KEY_HOLD_SPEED_INDEX]]: holdIdx,
 		});
 	});
 }
